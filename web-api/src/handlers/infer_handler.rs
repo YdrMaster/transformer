@@ -1,10 +1,9 @@
-use crate::response::Response;
-use crate::schemas;
-use crate::AppState;
+use crate::{response::Response, schemas, AppState};
 use actix_web::{post, web, Error, HttpResponse};
-use futures::channel::mpsc;
-use futures::stream::{Stream, StreamExt};
-use service::Session;
+use futures::{
+    channel::mpsc,
+    stream::{Stream, StreamExt},
+};
 
 #[post("/infer")]
 pub async fn infer(
@@ -12,42 +11,31 @@ pub async fn infer(
     request: web::Json<schemas::InferRequest>,
 ) -> HttpResponse {
     info!("Request from {}: infer", request.session_id);
-
     match app_state.service_manager.get_session(&request) {
-        Ok(session) => {
-            let infer_stream = create_infer_stream(session, request, app_state);
-            Response::text_stream(infer_stream)
-        }
+        Ok(session) => Response::text_stream(create_infer_stream(session, request, app_state)),
         Err(e) => Response::error(e),
     }
 }
 
 fn create_infer_stream(
-    mut session: Session,
+    mut session: service::Session,
     request: web::Json<schemas::InferRequest>,
     app_state: web::Data<AppState>,
 ) -> impl Stream<Item = Result<web::Bytes, Error>> {
-    let (sender, receiver) = mpsc::channel(4096);
+    let (mut sender, receiver) = mpsc::channel(4096);
 
     tokio::spawn(async move {
-        let id = request.session_id.clone();
-        session_async_infer(&mut session, request, sender).await;
-        app_state.service_manager.reset_session(&id, session);
+        session
+            .chat(&request.inputs, |s| {
+                sender
+                    .try_send(s.to_string())
+                    .expect("Failed to write data into output channel.")
+            })
+            .await;
+        app_state
+            .service_manager
+            .reset_session(&request.session_id, session);
     });
 
-    receiver.map(|word| Ok(web::Bytes::from(word)))
-}
-
-async fn session_async_infer(
-    session: &mut Session,
-    request: web::Json<schemas::InferRequest>,
-    mut sender: mpsc::Sender<String>,
-) {
-    session
-        .chat(&request.inputs, |s| {
-            sender
-                .try_send(s.to_string())
-                .expect("Failed to write data into output channel.")
-        })
-        .await
+    receiver.map(|word| Ok(word.into()))
 }

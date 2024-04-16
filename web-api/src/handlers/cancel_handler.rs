@@ -1,6 +1,4 @@
-use crate::response::Response;
-use crate::schemas;
-use crate::AppState;
+use crate::{response::Response, schemas, AppState};
 use actix_web::{post, web, HttpResponse};
 
 #[post("/cancel")]

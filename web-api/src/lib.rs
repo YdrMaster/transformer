@@ -1,24 +1,23 @@
-use actix_web::{web, App, HttpServer};
-use service::Service;
-use std::{fmt::Debug, net::ToSocketAddrs, sync::Arc};
-
 mod handlers;
 mod manager;
 mod response;
 mod schemas;
+
+use actix_web::{web, App, HttpServer};
 use manager::ServiceManager;
+use std::{fmt::Debug, net::ToSocketAddrs, sync::Arc};
 
 #[macro_use]
 extern crate log;
 
 /// All global variables and services shared among all endpoints in this App
-pub struct AppState {
+struct AppState {
     /// Manager of this App, which provides all kinds of services such as infer, session management, etc
-    pub service_manager: Arc<ServiceManager>,
+    service_manager: Arc<ServiceManager>,
 }
 
 pub async fn start_infer_service(
-    service: Service,
+    service: service::Service,
     addrs: impl ToSocketAddrs + Debug,
 ) -> std::io::Result<()> {
     println!("Starting service at {addrs:?}");

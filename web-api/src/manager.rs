@@ -1,8 +1,11 @@
 use crate::schemas;
 use actix_web::web;
 use service::{Service, Session, SessionHandle};
-use std::collections::{hash_map::Entry, HashMap};
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    sync::{Arc, Mutex},
+};
+
 pub struct ServiceManager {
     /// All sessions, session id as key.
     /// New session will be created when a new id comes.
@@ -17,6 +20,7 @@ pub struct ServiceManager {
     /// Inference service provided by backend model
     infer_service: Arc<Service>,
 }
+
 impl ServiceManager {
     pub fn from(infer_service: Arc<Service>) -> Self {
         ServiceManager {
@@ -42,14 +46,12 @@ impl ServiceManager {
         {
             // Case session id exists
             Entry::Occupied(mut e) => match e.get_mut().take() {
-                // If session is being served
-                None => Err(schemas::Error::SessionBusy),
                 // If session available, check request
                 Some(s) => {
                     if request.first_request {
                         // Session id exists but user thinks otherwise, overwrite current session
                         Ok(
-                            e.insert(Some(self.create_session(request.session_id.to_string())))
+                            e.insert(Some(self.create_session(request.session_id.clone())))
                                 .take()
                                 .unwrap(),
                         )
@@ -58,13 +60,15 @@ impl ServiceManager {
                         Ok(s)
                     }
                 }
+                // If session is being served
+                None => Err(schemas::Error::SessionBusy),
             },
             // Case new session id
             Entry::Vacant(e) => {
                 if request.first_request {
                     // First request, create new session
                     Ok(
-                        e.insert(Some(self.create_session(request.session_id.to_string())))
+                        e.insert(Some(self.create_session(request.session_id.clone())))
                             .take()
                             .unwrap(),
                     )
@@ -101,17 +105,14 @@ impl ServiceManager {
         &self,
         request: &web::Json<schemas::CancelRequest>,
     ) -> Result<schemas::Success, schemas::Error> {
-        match self
-            .session_handles
+        self.session_handles
             .lock()
             .unwrap()
-            .entry(request.session_id.to_string())
-        {
-            Entry::Occupied(handle) => {
-                handle.get().abort();
-                Ok(schemas::Success::SessionCanceled)
-            }
-            Entry::Vacant(_) => Err(schemas::Error::CancelFailed),
-        }
+            .get(&request.session_id)
+            .ok_or(schemas::Error::CancelFailed)
+            .map(|handle| {
+                handle.abort();
+                schemas::Success::SessionCanceled
+            })
     }
 }
