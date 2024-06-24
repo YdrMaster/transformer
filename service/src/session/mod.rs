@@ -81,9 +81,10 @@ impl<M: CausalLM> Session<M> {
                 let cache = self.cache.as_mut().unwrap();
 
                 self.dialog.revert(dialog_pos);
-                let cached = cache.revert(self.dialog.num_tokens());
                 let last_prompt = self.dialog.last_prompt().map_or(0, |p| p.len());
-                if cached < last_prompt {
+                if cache.revert(self.dialog.num_tokens()).is_none()
+                    || cache.get_last_cached_range_len() < last_prompt
+                {
                     let len = self.component.handle.model.max_seq_len() as usize;
                     let (tokens, pos) = self.dialog.window(len);
                     cache.reset_with(tokens, pos);
@@ -141,7 +142,7 @@ impl<M: CausalLM> Session<M> {
             // 只要忙会话收集到任何 token，就生成一个新的句子
             self.dialog.push(cache.slice_tail(end).to_vec());
         }
-        cache.cleanup();
+        cache.cleanup_before_start();
         info!("Cache restored at {} tokens", cache.end());
         self.cache = Some(cache);
     }

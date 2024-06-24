@@ -39,11 +39,11 @@ impl<Storage> Task<Storage> {
     }
 
     #[inline]
-    pub fn push(&mut self, token: utok, min: usize, max: usize) -> bool {
+    pub fn push(&mut self, token: utok, start_size: usize, end_size: usize, max: usize) -> bool {
         if self.sender.send(token).is_ok() {
             if let Some(cache) = self.cache.lock().unwrap().as_mut() {
                 cache.push(token);
-                cache.reset_within(min, max);
+                cache.reset_within_start_and_end_range(start_size, end_size, max);
                 return true;
             }
         }

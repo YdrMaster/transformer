@@ -29,7 +29,7 @@ impl<M: CausalLM> TaskHandle<M> {
 impl<M: CausalLM> ServiceComponent<M> {
     pub(super) fn infer(&self, sample: SampleArgs, mut cache: Cache<M::Storage>) -> TaskHandle<M> {
         let max = self.handle.model.max_seq_len() as usize;
-        cache.reset_within(max / 4, max / 4 * 3);
+        cache.reset_within_start_and_end_range(max / 4, max / 4, max / 4 * 3);
         // 生成推理任务与会话的交互管道
         let cache = Arc::new(Mutex::new(Some(cache)));
         let (sender, receiver) = unbounded_channel();
@@ -137,14 +137,15 @@ where
             tokio::task::spawn_blocking(move || {
                 let eos = self_.model.eos_token();
                 let max = self_.model.max_seq_len() as usize;
-                let min = max / 4;
+                let end_size = max / 4;
+                let start_size = max / 4;
                 zip(tasks, num_decode)
                     .filter(|(_, n)| *n > 0)
                     .map(|(t, _)| t)
                     .zip(tokens)
                     .filter(|(_, token)| *token != eos)
                     .for_each(|(mut task, token)| {
-                        if task.push(token, min, max) {
+                        if task.push(token, start_size, end_size, max) {
                             self_.batcher.enq(task);
                         }
                     });
