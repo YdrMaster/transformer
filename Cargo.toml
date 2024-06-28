@@ -8,6 +8,7 @@ members = [
     "service",
     "web-api",
     "xtask",
+    "middlewares",
 
     "devices/common",
     "devices/common-cpu",

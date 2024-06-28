@@ -1,6 +1,6 @@
 //! All HttpResponses in this App.
 
-use crate::schemas;
+use middlewares::utils;
 use http_body_util::{combinators::BoxBody, BodyExt, Full, StreamBody};
 use hyper::{
     body::{Bytes, Frame},
@@ -20,7 +20,7 @@ pub fn text_stream(
         .unwrap()
 }
 
-pub fn success(success: impl schemas::Success) -> Response<BoxBody<Bytes, hyper::Error>> {
+pub fn success(success: impl utils::Success) -> Response<BoxBody<Bytes, hyper::Error>> {
     #[derive(Serialize)]
     struct SuccessResponse<'a> {
         message: &'a str,
@@ -36,7 +36,7 @@ pub fn success(success: impl schemas::Success) -> Response<BoxBody<Bytes, hyper:
         .unwrap()
 }
 
-pub fn error(e: schemas::Error) -> Response<BoxBody<Bytes, hyper::Error>> {
+pub fn error(e: utils::Error) -> Response<BoxBody<Bytes, hyper::Error>> {
     Response::builder()
         .status(e.status())
         .header(CONTENT_TYPE, "application/json")
