@@ -340,6 +340,7 @@ dependencies = [
 name = "common-cn"
 version = "0.0.0"
 dependencies = [
+ "bindgen",
  "build-script-cfg",
  "common 0.0.0",
  "common-devices",

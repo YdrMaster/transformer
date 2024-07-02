@@ -11,7 +11,9 @@ common = { path = "../../common" }
 common-devices = { path = "../common" }
 tensor = { path = "../../tensor" }
 operators = { workspace = true, features = ["cambricon-mlu"] }
+digit-layout="0.0"
 
 [build-dependencies]
 build-script-cfg.workspace = true
 search-neuware-tools.workspace = true
+bindgen = "0.69"
