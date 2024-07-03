@@ -1,23 +1,22 @@
 use crate::utils::{
-    SessionId,
-    Error,
+    SessionError,
     ForkSuccess,
     DropSuccess
+};
+use std::{
+    fmt::Debug, hash::Hash, num::NonZeroUsize, sync::{
+        Mutex, MutexGuard
+    }
 };
 use service::Session;
 use causal_lm::CausalLM;
 use lru::LruCache;
-use std::{
-        num::NonZeroUsize, sync::{
-        Mutex, MutexGuard
-    }
-};
 
-pub struct SessionManager<M: CausalLM> {
+pub struct SessionManager<SessionId, M: CausalLM> {
     pending: Mutex<LruCache<SessionId, Option<Session<M>>>>
 }
 
-impl<M: CausalLM> SessionManager<M> {
+impl<SessionId: Clone + Eq + PartialEq + Hash + Debug, M: CausalLM> SessionManager<SessionId, M> {
     pub fn new(capacity: Option<usize>) -> Self {
         let cap = capacity.map(|c| NonZeroUsize::new(c).expect("Session capacity must be non-zero"));
         Self {
@@ -25,63 +24,55 @@ impl<M: CausalLM> SessionManager<M> {
         }
     }
 
-    pub fn get_mut(&self, k: &SessionId) -> Result<Session<M>, Error> {
+    pub fn get_mut(&self, k: &SessionId) -> Result<Session<M>, SessionError> {
         self.pending
             .lock()
             .unwrap()
             .get_mut(&k)
-            .ok_or(Error::SessionNotFound)?
+            .ok_or(SessionError::SessionNotFound)?
             .take()
-            .ok_or(Error::SessionBusy)
+            .ok_or(SessionError::SessionBusy)
     }
 
-    pub fn get_or_insert_mut(&self, session_id: &SessionId, v: Session<M>) -> Result<Session<M>, Error> {
+    pub fn get_or_insert_mut(&self, session_id: &SessionId, v: Session<M>) -> Result<Session<M>, SessionError> {
         self.pending
             .lock()
             .unwrap()
             .get_or_insert_mut(session_id.clone(),
-                || { info!("{:?} created", &session_id);
-                Some(v)})
+                || { Some(v) })
             .take()
-            .ok_or(Error::SessionBusy)
+            .ok_or(SessionError::SessionBusy)
     }
 
-    pub fn drop(&self, session_id: &SessionId) -> Result<DropSuccess, Error>{
+    pub fn drop(&self, session_id: &SessionId) -> Result<DropSuccess, SessionError>{
         if self.pending
             .lock()
             .unwrap()
             .pop(&session_id)
             .is_some() {
-                info!("{session_id:?} dropped in drop function");
                 Ok(DropSuccess)
             } else {
-                Err(Error::SessionNotFound)
+                Err(SessionError::SessionNotFound)
             }
     }
 
-    pub fn fork(&self, session_id: String, new_session_id: String) -> Result<ForkSuccess, Error> {
-        let new_session_id_warped = SessionId::Permanent(new_session_id.clone());
+    pub fn fork(&self, session_id: &SessionId, new_session_id: &SessionId) -> Result<ForkSuccess, SessionError> {
         let mut sessions = self.get_sessions();
 
-        if !sessions.contains(&new_session_id_warped) {
+        if !sessions.contains(&new_session_id) {
             let new = sessions
-                .get_mut(&SessionId::Permanent(session_id.clone()))
-                .ok_or(Error::SessionBusy)?
+                .get_mut(session_id)
+                .ok_or(SessionError::SessionNotFound)?
                 .as_ref()
-                .ok_or(Error::SessionBusy)?
+                .ok_or(SessionError::SessionBusy)?
                 .fork();
-            info!("{new_session_id} is forked from {session_id:?}");
-            if let Some((out, _)) = sessions.push(new_session_id_warped, Some(new)) {
+            if let Some((out, _)) = sessions.push(new_session_id.clone(), Some(new)) {
                 warn!("{out:?} dropped because LRU cache is full");
             }
             Ok(ForkSuccess)
         } else {
-            Err(Error::SessionDuplicate)
+            Err(SessionError::SessionDuplicate)
         }
-    }
-
-    pub fn get_sessions(&self) -> MutexGuard<LruCache<SessionId, Option<Session<M>>>> {
-        self.pending.lock().unwrap()
     }
 
     pub fn restore(&self, session_id: &SessionId, session: Session<M>)
@@ -89,5 +80,9 @@ impl<M: CausalLM> SessionManager<M> {
         if let Some(option) = self.pending.lock().unwrap().get_mut(session_id) {
             assert!(option.replace(session).is_none());
         }
+    }
+
+    fn get_sessions(&self) -> MutexGuard<LruCache<SessionId, Option<Session<M>>>> {
+        self.pending.lock().unwrap()
     }
 }

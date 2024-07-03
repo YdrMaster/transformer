@@ -5,7 +5,7 @@ mod response;
 mod schemas;
 
 use causal_lm::CausalLM;
-use middlewares::utils;
+
 use http_body_util::{combinators::BoxBody, BodyExt, Empty};
 use hyper::{
     body::{Bytes, Incoming},
@@ -87,7 +87,7 @@ where
                             Ok(ret) => $f(ret),
                             Err(e) => error(e),
                         },
-                        Err(e) => error(utils::Error::WrongJson(e)),
+                        Err(e) => error(schemas::Error::WrongJson(e)),
                     })
                 })
             };

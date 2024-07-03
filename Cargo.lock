@@ -996,8 +996,6 @@ name = "middlewares"
 version = "0.1.0"
 dependencies = [
  "causal-lm",
- "hyper",
- "hyper-util",
  "log",
  "lru",
  "serde",

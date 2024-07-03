@@ -1,9 +1,8 @@
-use crate::schemas::{Infer, Sentence};
+use crate::schemas::{self, AnonymousSessionId, Error, Infer, Sentence, SessionId};
 use causal_lm::CausalLM;
 use service::{Service, Session};
 use std::{
-    num::NonZeroUsize,
-    sync::Arc,
+    fmt::Debug, hash::Hash, num::NonZeroUsize, sync::Arc
 };
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use middlewares::{session_manager::SessionManager, 
@@ -12,7 +11,7 @@ use middlewares::{session_manager::SessionManager,
 
 pub(crate) struct ServiceManager<M: CausalLM> {
     service: Service<M>,
-    session_manager: SessionManager<M>,
+    session_manager: SessionManager<SessionId, M>,
 }
 
 impl<M: CausalLM> ServiceManager<M> {
@@ -179,15 +178,32 @@ where
             new_session_id,
         }: Fork,
     ) -> Result<ForkSuccess, Error> {
-        self.session_manager.fork(session_id, new_session_id)
+        let new_session_id_ = SessionId::Permanent(new_session_id.clone());
+        let session_id_ = SessionId::Permanent(session_id.clone());
+        let result = self.session_manager.fork(&session_id_, &new_session_id_);
+        match result {
+            Ok(ForkSuccess) => {
+                Ok(ForkSuccess)
+            }
+            Err(e) => {
+                Err(Error::convert_session_error_to_error(&e).unwrap())
+            }
+        }
     }
 
     pub fn drop_(&self, Drop { session_id }: Drop) -> Result<DropSuccess, Error> {
-        let session_id = SessionId::Permanent(session_id);
-        self.drop_with_session_id(session_id)
+        let result = self.drop_with_session_id(SessionId::Permanent(session_id));
+        match result {
+            Ok(DropSuccess) => {
+                Ok(DropSuccess)
+            }
+            Err(e) => {
+                Err(Error::convert_session_error_to_error(&e).unwrap())
+            }
+        }
     }
 
-    fn drop_with_session_id(&self, session_id: SessionId) -> Result<DropSuccess, Error> {
+    fn drop_with_session_id(&self, session_id: SessionId) -> Result<DropSuccess, SessionError> {
         self.session_manager.drop(&session_id)
     }
 }

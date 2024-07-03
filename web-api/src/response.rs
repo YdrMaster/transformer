@@ -1,6 +1,7 @@
 //! All HttpResponses in this App.
 
 use middlewares::utils;
+use crate::schemas;
 use http_body_util::{combinators::BoxBody, BodyExt, Full, StreamBody};
 use hyper::{
     body::{Bytes, Frame},
@@ -36,7 +37,7 @@ pub fn success(success: impl utils::Success) -> Response<BoxBody<Bytes, hyper::E
         .unwrap()
 }
 
-pub fn error(e: utils::Error) -> Response<BoxBody<Bytes, hyper::Error>> {
+pub fn error(e: schemas::Error) -> Response<BoxBody<Bytes, hyper::Error>> {
     Response::builder()
         .status(e.status())
         .header(CONTENT_TYPE, "application/json")
