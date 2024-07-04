@@ -1,7 +1,7 @@
+use crate::Session;
 use causal_lm::CausalLM;
 use log::warn;
 use lru::LruCache;
-use service::Session;
 use std::{fmt::Debug, hash::Hash, num::NonZeroUsize, sync::Mutex};
 
 pub struct SessionManager<SessionId, M: CausalLM> {

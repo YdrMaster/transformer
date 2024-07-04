@@ -13,6 +13,7 @@ tokenizer = { path = "../tokenizer" }
 causal-lm = { path = "../causal-lm" }
 log.workspace = true
 tokio.workspace = true
+lru = "0.12"
 
 [dev-dependencies]
 colored = "2.1"

@@ -2,8 +2,7 @@ use crate::schemas::{
     AnonymousSessionId, DropSuccess, Drop_, Error, Fork, ForkSuccess, Infer, Sentence, SessionId,
 };
 use causal_lm::CausalLM;
-use middlewares::{SessionError, SessionManager};
-use service::{Service, Session};
+use service::{Service, Session, SessionError, SessionManager};
 use std::{num::NonZeroUsize, sync::Arc};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 
@@ -78,84 +77,94 @@ where
         match (session_id, dialog_pos.unwrap_or(0)) {
             (Some(session_id_str), 0) => {
                 let session_id = SessionId::Permanent(session_id_str);
-                let mut session = self
+                let session_result = self
                     .session_manager
-                    .get_or_insert(session_id.clone(), || self.service.launch())
-                    .unwrap();
-                let (sender, receiver) = mpsc::unbounded_channel();
-                let self_ = self.clone();
-                tokio::spawn(async move {
-                    session.revert(0).unwrap();
-                    infer(
-                        &session_id,
-                        &mut session,
-                        messages,
-                        temperature,
-                        top_k,
-                        top_p,
-                        sender,
-                    )
-                    .await;
-                    self_.restore(&session_id, session);
-                });
-                Ok(receiver)
+                    .get_or_insert(session_id.clone(), || self.service.launch());
+                match session_result {
+                    Ok(mut session) => {
+                        let (sender, receiver) = mpsc::unbounded_channel();
+                        let self_ = self.clone();
+                        tokio::spawn(async move {
+                            session.revert(0).unwrap();
+                            infer(
+                                &session_id,
+                                &mut session,
+                                messages,
+                                temperature,
+                                top_k,
+                                top_p,
+                                sender,
+                            )
+                            .await;
+                            self_.restore(&session_id, session);
+                        });
+                        Ok(receiver)
+                    }
+                    Err(e) => Err(Error::Session(e)),
+                }
             }
             (Some(session_id_str), p) => {
                 let session_id = SessionId::Permanent(session_id_str);
-                let mut session = self.session_manager.take(&session_id).unwrap();
-
-                if session.revert(p).is_err() {
-                    let current = session.dialog_pos();
-                    warn!(
-                        "Failed to revert {session_id:?} from {current} to {p}, session restored"
-                    );
-                    self.restore(&session_id, session);
-                    return Err(Error::InvalidDialogPos(current));
+                let session_result = self.session_manager.take(&session_id);
+                match session_result {
+                    Ok(mut session) => {
+                        if session.revert(p).is_err() {
+                            let current = session.dialog_pos();
+                            warn!(
+                                "Failed to revert {session_id:?} from {current} to {p}, session restored"
+                            );
+                            self.restore(&session_id, session);
+                            return Err(Error::InvalidDialogPos(current));
+                        }
+                        let (sender, receiver) = mpsc::unbounded_channel();
+                        let self_ = self.clone();
+                        tokio::spawn(async move {
+                            info!("{session_id:?} reverted to {p}");
+                            infer(
+                                &session_id,
+                                &mut session,
+                                messages,
+                                temperature,
+                                top_k,
+                                top_p,
+                                sender,
+                            )
+                            .await;
+                            self_.restore(&session_id, session);
+                        });
+                        Ok(receiver)
+                    }
+                    Err(e) => Err(Error::Session(e)),
                 }
-
-                let (sender, receiver) = mpsc::unbounded_channel();
-                let self_ = self.clone();
-                tokio::spawn(async move {
-                    info!("{session_id:?} reverted to {p}");
-                    infer(
-                        &session_id,
-                        &mut session,
-                        messages,
-                        temperature,
-                        top_k,
-                        top_p,
-                        sender,
-                    )
-                    .await;
-                    self_.restore(&session_id, session);
-                });
-
-                Ok(receiver)
             }
             (None, 0) => {
                 let session_id = SessionId::Temporary(AnonymousSessionId::new());
-                let mut session = self
+                let session_result = self
                     .session_manager
-                    .get_or_insert(session_id.clone(), || self.service.launch())
-                    .unwrap();
-                let (sender, receiver) = mpsc::unbounded_channel();
-                let self_ = self.clone();
-                if messages.len() % 2 == 1 {
-                    tokio::spawn(async move {
-                        infer(
-                            &session_id,
-                            &mut session,
-                            messages,
-                            temperature,
-                            top_k,
-                            top_p,
-                            sender,
-                        )
-                        .await;
-                        self_.drop_with_session_id(session_id).unwrap();
-                    });
+                    .get_or_insert(session_id.clone(), || self.service.launch());
+                match session_result {
+                    Ok(mut session) => {
+                        let (sender, receiver) = mpsc::unbounded_channel();
+                        let self_ = self.clone();
+                        if messages.len() % 2 == 1 {
+                            tokio::spawn(async move {
+                                infer(
+                                    &session_id,
+                                    &mut session,
+                                    messages,
+                                    temperature,
+                                    top_k,
+                                    top_p,
+                                    sender,
+                                )
+                                .await;
+                                self_.drop_with_session_id(session_id).unwrap();
+                            });
+                        }
+                        Ok(receiver)
+                    }
+                    Err(e) => Err(Error::Session(e)),
                 }
-                Ok(receiver)
             }
             (None, _) => {
                 warn!("Temporary session must be created with zero dialog position");

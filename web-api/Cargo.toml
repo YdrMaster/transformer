@@ -7,8 +7,6 @@ authors = ["Zezhong Pan <panzezhong@qiyuanlab.com>"]
 [dependencies]
 causal-lm = { path = "../causal-lm" }
 service = { path = "../service" }
-middlewares = { path = "../middlewares" }
-
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["net"] }

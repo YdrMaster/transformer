@@ -1,5 +1,5 @@
 use hyper::StatusCode;
-use middlewares::SessionError;
+use service::SessionError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(serde::Deserialize)]

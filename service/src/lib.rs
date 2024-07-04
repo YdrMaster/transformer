@@ -1,6 +1,7 @@
 #![deny(warnings)]
 
 mod session;
+mod session_manager;
 mod template;
 
 use causal_lm::{CausalLM, SampleArgs};
@@ -11,6 +12,7 @@ use tokenizer::{BPECommonNormalizer, Normalizer, Tokenizer, VocabTxt, BPE};
 use tokio::task::JoinHandle;
 
 pub use session::{BusySession, ChatError, Session};
+pub use session_manager::{SessionError, SessionManager};
 
 /// 对话服务。
 pub struct Service<M: CausalLM> {

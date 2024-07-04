@@ -5,7 +5,6 @@ mod response;
 mod schemas;
 
 use causal_lm::CausalLM;
-
 use http_body_util::{combinators::BoxBody, BodyExt, Empty};
 use hyper::{
     body::{Bytes, Incoming},
