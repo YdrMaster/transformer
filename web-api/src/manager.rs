@@ -1,13 +1,11 @@
-use crate::schemas::{self, AnonymousSessionId, Error, Infer, Sentence, SessionId};
+use crate::schemas::{
+    AnonymousSessionId, DropSuccess, Drop_, Error, Fork, ForkSuccess, Infer, Sentence, SessionId,
+};
 use causal_lm::CausalLM;
+use middlewares::{SessionError, SessionManager};
 use service::{Service, Session};
-use std::{
-    fmt::Debug, hash::Hash, num::NonZeroUsize, sync::Arc
-};
+use std::{num::NonZeroUsize, sync::Arc};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
-use middlewares::{session_manager::SessionManager, 
-                  utils::{*}
-};
 
 pub(crate) struct ServiceManager<M: CausalLM> {
     service: Service<M>,
@@ -80,8 +78,9 @@ where
         match (session_id, dialog_pos.unwrap_or(0)) {
             (Some(session_id_str), 0) => {
                 let session_id = SessionId::Permanent(session_id_str);
-                let mut session = self.session_manager
-                    .get_or_insert_mut(&session_id, self.service.launch())
+                let mut session = self
+                    .session_manager
+                    .get_or_insert(session_id.clone(), || self.service.launch())
                     .unwrap();
                 let (sender, receiver) = mpsc::unbounded_channel();
                 let self_ = self.clone();
@@ -103,9 +102,7 @@ where
             }
             (Some(session_id_str), p) => {
                 let session_id = SessionId::Permanent(session_id_str);
-                let mut session = self.session_manager
-                    .get_mut(&session_id)
-                    .unwrap();
+                let mut session = self.session_manager.take(&session_id).unwrap();
 
                 if session.revert(p).is_err() {
                     let current = session.dialog_pos();
@@ -137,8 +134,9 @@ where
             }
             (None, 0) => {
                 let session_id = SessionId::Temporary(AnonymousSessionId::new());
-                let mut session = self.session_manager
-                    .get_or_insert_mut(&session_id, self.service.launch())
+                let mut session = self
+                    .session_manager
+                    .get_or_insert(session_id.clone(), || self.service.launch())
                     .unwrap();
                 let (sender, receiver) = mpsc::unbounded_channel();
                 let self_ = self.clone();
@@ -180,30 +178,24 @@ where
     ) -> Result<ForkSuccess, Error> {
         let new_session_id_ = SessionId::Permanent(new_session_id.clone());
         let session_id_ = SessionId::Permanent(session_id.clone());
-        let result = self.session_manager.fork(&session_id_, &new_session_id_);
+        let result = self.session_manager.fork(session_id_, new_session_id_);
         match result {
-            Ok(ForkSuccess) => {
-                Ok(ForkSuccess)
-            }
-            Err(e) => {
-                Err(Error::convert_session_error_to_error(&e).unwrap())
-            }
+            Ok(()) => Ok(ForkSuccess),
+            Err(e) => Err(Error::Session(e)),
         }
     }
 
-    pub fn drop_(&self, Drop { session_id }: Drop) -> Result<DropSuccess, Error> {
+    pub fn drop_(&self, Drop_ { session_id }: Drop_) -> Result<DropSuccess, Error> {
         let result = self.drop_with_session_id(SessionId::Permanent(session_id));
         match result {
-            Ok(DropSuccess) => {
-                Ok(DropSuccess)
-            }
-            Err(e) => {
-                Err(Error::convert_session_error_to_error(&e).unwrap())
-            }
+            Ok(DropSuccess) => Ok(DropSuccess),
+            Err(e) => Err(Error::Session(e)),
         }
     }
 
     fn drop_with_session_id(&self, session_id: SessionId) -> Result<DropSuccess, SessionError> {
-        self.session_manager.drop(&session_id)
+        self.session_manager
+            .drop_(&session_id)
+            .map(|()| DropSuccess)
     }
 }

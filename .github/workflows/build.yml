@@ -10,12 +10,9 @@
 name: CI
 
 on:
+  pull_request:
   push:
     paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-  pull_request:
-    paths:
       - '**.md'
       - 'LICENSE'
 
@@ -31,6 +28,9 @@ jobs:
 
       - name: Check format
         run: cargo fmt --check
+
+      - name: Update to latest deps
+        run: cargo update
 
       - name: Run test
         run: cargo test

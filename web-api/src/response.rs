@@ -1,7 +1,6 @@
 //! All HttpResponses in this App.
 
-use middlewares::utils;
-use crate::schemas;
+use crate::schemas::{self, Success};
 use http_body_util::{combinators::BoxBody, BodyExt, Full, StreamBody};
 use hyper::{
     body::{Bytes, Frame},
@@ -21,7 +20,7 @@ pub fn text_stream(
         .unwrap()
 }
 
-pub fn success(success: impl utils::Success) -> Response<BoxBody<Bytes, hyper::Error>> {
+pub fn success(success: impl Success) -> Response<BoxBody<Bytes, hyper::Error>> {
     #[derive(Serialize)]
     struct SuccessResponse<'a> {
         message: &'a str,

@@ -14,7 +14,6 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["net"] }
 log.workspace = true
 
-lru = "0.12"
 hyper = { version = "1.3", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["http1", "tokio", "server"] }
 http-body-util = "0.1"
