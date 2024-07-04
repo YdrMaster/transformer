@@ -1,0 +1,13 @@
+[package]
+name = "middlewares"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+service = { path = "../service" }
+causal-lm = { path = "../causal-lm" }
+
+log = "0.4"
+lru = "0.12"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

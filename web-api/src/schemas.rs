@@ -1,4 +1,6 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use hyper::StatusCode;
+use middlewares::utils::SessionError;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct Infer {
@@ -17,37 +19,24 @@ pub(crate) struct Sentence {
     pub content: String,
 }
 
-#[derive(serde::Deserialize)]
-pub(crate) struct Fork {
-    pub session_id: String,
-    pub new_session_id: String,
-}
+#[derive(Eq, PartialEq, Hash, Clone, Debug)]
+pub struct AnonymousSessionId(usize);
 
-#[derive(serde::Deserialize)]
-pub(crate) struct Drop {
-    pub session_id: String,
-}
-
-pub(crate) struct ForkSuccess;
-pub(crate) struct DropSuccess;
-
-pub(crate) trait Success {
-    fn msg(&self) -> &str;
-}
-
-impl Success for ForkSuccess {
-    fn msg(&self) -> &str {
-        "fork success"
+impl AnonymousSessionId {
+    pub(crate)  fn new() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
 }
-impl Success for DropSuccess {
-    fn msg(&self) -> &str {
-        "drop success"
-    }
+
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub enum SessionId {
+    Permanent(String),
+    Temporary(AnonymousSessionId),
 }
 
 #[derive(Debug)]
-pub(crate) enum Error {
+pub enum Error {
     SessionBusy,
     SessionDuplicate,
     SessionNotFound,
@@ -108,6 +97,14 @@ impl Error {
                     current_dialog_pos,
                 })
             }
+        }
+    }
+
+    pub(crate) fn convert_session_error_to_error(session_error: &SessionError) -> Option<Error> {
+        match session_error {
+            SessionError::SessionBusy => Some(Error::SessionBusy),
+            SessionError::SessionDuplicate => Some(Error::SessionDuplicate),
+            SessionError::SessionNotFound => Some(Error::SessionNotFound)
         }
     }
 }

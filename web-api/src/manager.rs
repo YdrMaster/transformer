@@ -1,35 +1,17 @@
-use crate::schemas::{Drop, DropSuccess, Error, Fork, ForkSuccess, Infer, Sentence};
+use crate::schemas::{self, AnonymousSessionId, Error, Infer, Sentence, SessionId};
 use causal_lm::CausalLM;
-use lru::LruCache;
 use service::{Service, Session};
 use std::{
-    num::NonZeroUsize,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
+    fmt::Debug, hash::Hash, num::NonZeroUsize, sync::Arc
 };
 use tokio::sync::mpsc::{self, UnboundedReceiver};
+use middlewares::{session_manager::SessionManager, 
+                  utils::{*}
+};
 
 pub(crate) struct ServiceManager<M: CausalLM> {
     service: Service<M>,
-    pending: Mutex<LruCache<SessionId, Option<Session<M>>>>,
-}
-
-#[derive(Eq, PartialEq, Hash, Clone, Debug)]
-struct AnonymousSessionId(usize);
-
-impl AnonymousSessionId {
-    fn new() -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-enum SessionId {
-    Permanent(String),
-    Temporary(AnonymousSessionId),
+    session_manager: SessionManager<SessionId, M>,
 }
 
 impl<M: CausalLM> ServiceManager<M> {
@@ -39,7 +21,7 @@ impl<M: CausalLM> ServiceManager<M> {
             capacity.map(|c| NonZeroUsize::new(c).expect("Session capacity must be non-zero"));
         Self {
             service,
-            pending: Mutex::new(cap.map(LruCache::new).unwrap_or_else(LruCache::unbounded)),
+            session_manager: SessionManager::new(cap.map(|c| c.get())),
         }
     }
 }
@@ -98,22 +80,13 @@ where
         match (session_id, dialog_pos.unwrap_or(0)) {
             (Some(session_id_str), 0) => {
                 let session_id = SessionId::Permanent(session_id_str);
-                let mut session = self
-                    .pending
-                    .lock()
-                    .unwrap()
-                    .get_or_insert_mut(session_id.clone(), || {
-                        info!("{:?} created", &session_id);
-                        Some(self.service.launch())
-                    })
-                    .take()
-                    .ok_or(Error::SessionBusy)?;
-
+                let mut session = self.session_manager
+                    .get_or_insert_mut(&session_id, self.service.launch())
+                    .unwrap();
                 let (sender, receiver) = mpsc::unbounded_channel();
                 let self_ = self.clone();
                 tokio::spawn(async move {
                     session.revert(0).unwrap();
-
                     infer(
                         &session_id,
                         &mut session,
@@ -124,22 +97,15 @@ where
                         sender,
                     )
                     .await;
-
                     self_.restore(&session_id, session);
                 });
-
                 Ok(receiver)
             }
             (Some(session_id_str), p) => {
                 let session_id = SessionId::Permanent(session_id_str);
-                let mut session = self
-                    .pending
-                    .lock()
-                    .unwrap()
+                let mut session = self.session_manager
                     .get_mut(&session_id)
-                    .ok_or(Error::SessionNotFound)?
-                    .take()
-                    .ok_or(Error::SessionBusy)?;
+                    .unwrap();
 
                 if session.revert(p).is_err() {
                     let current = session.dialog_pos();
@@ -154,7 +120,6 @@ where
                 let self_ = self.clone();
                 tokio::spawn(async move {
                     info!("{session_id:?} reverted to {p}");
-
                     infer(
                         &session_id,
                         &mut session,
@@ -165,7 +130,6 @@ where
                         sender,
                     )
                     .await;
-
                     self_.restore(&session_id, session);
                 });
 
@@ -173,16 +137,9 @@ where
             }
             (None, 0) => {
                 let session_id = SessionId::Temporary(AnonymousSessionId::new());
-                let mut session = self
-                    .pending
-                    .lock()
-                    .unwrap()
-                    .get_or_insert_mut(session_id.clone(), || {
-                        info!("{:?} created", &session_id);
-                        Some(self.service.launch())
-                    })
-                    .take()
-                    .ok_or(Error::SessionNotFound)?;
+                let mut session = self.session_manager
+                    .get_or_insert_mut(&session_id, self.service.launch())
+                    .unwrap();
                 let (sender, receiver) = mpsc::unbounded_channel();
                 let self_ = self.clone();
                 if messages.len() % 2 == 1 {
@@ -211,9 +168,7 @@ where
 
     #[inline]
     fn restore(&self, session_id: &SessionId, session: Session<M>) {
-        if let Some(option) = self.pending.lock().unwrap().get_mut(session_id) {
-            assert!(option.replace(session).is_none());
-        }
+        self.session_manager.restore(session_id, session);
     }
 
     pub fn fork(
@@ -223,38 +178,32 @@ where
             new_session_id,
         }: Fork,
     ) -> Result<ForkSuccess, Error> {
-        let mut sessions = self.pending.lock().unwrap();
-        let new_session_id_warped = SessionId::Permanent(new_session_id.clone());
-        if !sessions.contains(&new_session_id_warped) {
-            let new = sessions
-                .get_mut(&SessionId::Permanent(session_id.clone()))
-                .ok_or(Error::SessionNotFound)?
-                .as_ref()
-                .ok_or(Error::SessionBusy)?
-                .fork();
-
-            info!("{new_session_id} is forked from {session_id:?}");
-            if let Some((out, _)) = sessions.push(new_session_id_warped, Some(new)) {
-                warn!("{out:?} dropped because LRU cache is full");
+        let new_session_id_ = SessionId::Permanent(new_session_id.clone());
+        let session_id_ = SessionId::Permanent(session_id.clone());
+        let result = self.session_manager.fork(&session_id_, &new_session_id_);
+        match result {
+            Ok(ForkSuccess) => {
+                Ok(ForkSuccess)
             }
-            Ok(ForkSuccess)
-        } else {
-            warn!("Fork failed because {new_session_id} already exists");
-            Err(Error::SessionDuplicate)
+            Err(e) => {
+                Err(Error::convert_session_error_to_error(&e).unwrap())
+            }
         }
     }
 
     pub fn drop_(&self, Drop { session_id }: Drop) -> Result<DropSuccess, Error> {
-        let session_id = SessionId::Permanent(session_id);
-        self.drop_with_session_id(session_id)
+        let result = self.drop_with_session_id(SessionId::Permanent(session_id));
+        match result {
+            Ok(DropSuccess) => {
+                Ok(DropSuccess)
+            }
+            Err(e) => {
+                Err(Error::convert_session_error_to_error(&e).unwrap())
+            }
+        }
     }
 
-    fn drop_with_session_id(&self, session_id: SessionId) -> Result<DropSuccess, Error> {
-        if self.pending.lock().unwrap().pop(&session_id).is_some() {
-            info!("{session_id:?} dropped in drop function");
-            Ok(DropSuccess)
-        } else {
-            Err(Error::SessionNotFound)
-        }
+    fn drop_with_session_id(&self, session_id: SessionId) -> Result<DropSuccess, SessionError> {
+        self.session_manager.drop(&session_id)
     }
 }

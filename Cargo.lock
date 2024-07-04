@@ -984,6 +984,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "middlewares"
+version = "0.1.0"
+dependencies = [
+ "causal-lm",
+ "log",
+ "lru",
+ "serde",
+ "serde_json",
+ "service",
+]
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1717,6 +1729,7 @@ dependencies = [
  "hyper-util",
  "log",
  "lru",
+ "middlewares",
  "serde",
  "serde_json",
  "service",
