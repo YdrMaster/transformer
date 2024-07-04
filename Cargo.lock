@@ -344,7 +344,9 @@ dependencies = [
  "build-script-cfg",
  "common 0.0.0",
  "common-devices",
+ "digit-layout",
  "operators",
+ "sample",
  "search-neuware-tools 0.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tensor",
 ]
@@ -932,6 +934,7 @@ dependencies = [
  "causal-lm",
  "common 0.0.0",
  "common-cn",
+ "digit-layout",
  "llama",
  "search-neuware-tools 0.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
