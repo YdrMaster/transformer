@@ -14,6 +14,7 @@ fn main() {
     println!("cargo:rustc-link-search=native=/home/duanchenjie/workspace/operators/build/linux/x86_64/release");
     // 链接动态库，不要包含前缀 lib 和后缀 .so
     println!("cargo:rustc-link-lib=dylib=operators"); // 动态库名为 liboperators.so
+    println!("cargo:rustc-link-lib=dylib=cnnl_extra");
     // Link the OpenMP library
     println!("cargo:rustc-link-lib=dylib=gomp");    
 

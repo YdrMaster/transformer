@@ -4,12 +4,21 @@ mod resource;
 
 use causal_lm::{CausalLM, DecodingMeta, Model, QueryContext, SampleMeta};
 use common::{upos, utok, Blob, FileLoadError};
-use common_cn::{sample_cpu, slice, KernelsA, KernelsB, cndrv::{memcpy_d2h, Context, ContextResource, ContextSpore, CurrentCtx, DevByte, DevMem, DevMemSpore, Device, HostMemSpore, Queue, QueueSpore}, rustTensor as Tensor, CambriconKernels, DeviceEnum, Kernels, Mlu};
-use std::{iter::repeat, mem::ManuallyDrop, ops::Deref, path::Path, slice::from_raw_parts, sync::Arc};
+use common_cn::{
+    cndrv::{
+        memcpy_d2h, Context, ContextResource, ContextSpore, CurrentCtx, DevByte, DevMem,
+        DevMemSpore, Device, HostMemSpore, Queue, QueueSpore,
+    },
+    rustTensor as Tensor, sample_cpu, slice, CambriconKernels, DeviceEnum, Kernels, KernelsA,
+    KernelsB, Mlu,
+};
 use llama::{ComputeConst, InferenceConfig, LayerStorage, SliceOn, Weight};
+use std::{
+    iter::repeat, mem::ManuallyDrop, ops::Deref, path::Path, slice::from_raw_parts, sync::Arc,
+};
 
-use digit_layout::types::F16;
 pub use common_cn::{cndrv, synchronize};
+use digit_layout::types::F16;
 pub use resource::Cache;
 
 pub struct Transformer(ManuallyDrop<Internal>);
@@ -31,7 +40,7 @@ impl Model for Transformer {
     type Error = FileLoadError;
 
     #[inline]
-    fn load(model_dir: impl AsRef<Path>, meta: Self::Meta ) -> Result<Self, Self::Error> {
+    fn load(model_dir: impl AsRef<Path>, meta: Self::Meta) -> Result<Self, Self::Error> {
         // let time = Instant::now();
         let host = llama::Storage::load_safetensors(model_dir)?;
         // info!("load host: {:?}", time.elapsed());
@@ -43,32 +52,24 @@ impl Model for Transformer {
                 host.sporulate()
             };
 
-            Ok(Self (ManuallyDrop::new(Internal {
+            Ok(Self(ManuallyDrop::new(Internal {
                 resource: resource.clone(),
                 compute: ctx.queue().sporulate(),
-                kernels: CambriconKernels::new(
-                    DeviceEnum::DevCambriconMlu
-                ),
-                embed_tokens: host
-                    .embed_tokens
-                    .as_ref()
-                    .map_physical(page_lock),
+                kernels: CambriconKernels::new(DeviceEnum::DevCambriconMlu),
+                embed_tokens: host.embed_tokens.as_ref().map_physical(page_lock),
                 layers: host
-                .layers
+                    .layers
                     .iter()
                     .map(|l| l.map(|u| ctx.from_host(&u).sporulate()))
                     .collect::<Vec<_>>(),
                 lm_layernorm: host
                     .lm_layernorm
                     .map_physical(|u| ctx.from_host(&u).sporulate()),
-                lm_head: host
-                    .lm_head
-                    .map_physical(|u| ctx.from_host(&u).sporulate()),
-    
-                config: host.config,
-            })   ))     
-        })
+                lm_head: host.lm_head.map_physical(|u| ctx.from_host(&u).sporulate()),
 
+                config: host.config,
+            })))
+        })
     }
 }
 
@@ -115,7 +116,7 @@ impl CausalLM for Transformer {
                     );
                 })
             },
-        )        
+        )
     }
 
     fn token_embed(&self, queries: impl IntoIterator<Item = utok>) -> Tensor<Self::Storage> {
@@ -126,9 +127,7 @@ impl CausalLM for Transformer {
         let mut x = self.tensor(&[nt, d]);
         self.0.resource.apply(|ctx| {
             self.0.kernels.gather(
-                &mut x
-                    .as_mut()
-                    .map_physical(|u| &mut **u.mem.sprout_mut(ctx)),
+                &mut x.as_mut().map_physical(|u| &mut **u.mem.sprout_mut(ctx)),
                 &self.0.embed_tokens.as_ref().map_physical(|u| &**u),
                 tokens,
                 &ctx.queue(),
@@ -336,7 +335,9 @@ impl<'a> llama::ComputeStream for ComputeStream<'a> {
         &self,
     ) -> impl Iterator<Item = impl llama::LLamaLayer<Byte = <Self::Handle as llama::Handle>::Byte>>
     {
-        self.layers.iter().map(|l|LlamaLayer( self.queue().ctx(), l))
+        self.layers
+            .iter()
+            .map(|l| LlamaLayer(self.queue().ctx(), l))
     }
 }
 
@@ -346,11 +347,11 @@ macro_rules! access {
             .1
             .$name
             .as_ref()
-            .map_physical(|p|&**p.sprout_ref(&$self.0))
+            .map_physical(|p| &**p.sprout_ref(&$self.0))
     };
 }
 
-struct LlamaLayer<'a>(&'a CurrentCtx,&'a LayerStorage<DevMemSpore>);
+struct LlamaLayer<'a>(&'a CurrentCtx, &'a LayerStorage<DevMemSpore>);
 
 impl<'a> llama::LLamaLayer for LlamaLayer<'a> {
     type Byte = DevByte;

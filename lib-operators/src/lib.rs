@@ -3,11 +3,11 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 extern crate libc; // 使用 libc crate 提供一些 C 标准库类型和函数
 use digit_layout::types::F16 as RF16;
 
-use tensor::{Tensor as rustTensor, reslice};
 use digit_layout::DigitLayout;
 use std::ops::Deref;
+use tensor::{reslice, Tensor as rustTensor};
 
-use common::{Blob, f16};
+use common::{f16, Blob};
 
 impl DataLayout {
     pub fn new(packed: u16, sign: u16, size: u16, mantissa: u16, exponent: u16) -> Self {
@@ -47,8 +47,14 @@ where
         // 创建 TensorDescriptor
         let mut descriptor = std::ptr::null_mut();
         let datatype = DataLayout::from(tensor.data_layout());
-        createTensorDescriptor(&mut descriptor, tensor.shape().len() as u64, shape_ptr, strides_ptr, datatype);
-    
+        createTensorDescriptor(
+            &mut descriptor,
+            tensor.shape().len() as u64,
+            shape_ptr,
+            strides_ptr,
+            datatype,
+        );
+
         if !descriptor.is_null() {
             // 获取数据指针
             let data = tensor.physical().as_ptr() as *mut std::ffi::c_void;
@@ -59,19 +65,16 @@ where
         } else {
             panic!("Failed to create TensorDescriptor");
         }
-
     }
 }
 
 #[test]
 fn test_import() {
-
     // Create a device (using the enum from the bindings)
     let device = DeviceEnum::DevCpu;
 
     // Example configuration (replace with actual config data as needed)
     let config: *mut std::ffi::c_void = std::ptr::null_mut();
-
 
     unsafe {
         let descriptor = createSwigluDescriptor(device, config) as *mut SwigluDescriptor;
@@ -90,14 +93,13 @@ fn test_import() {
             .iter()
             .map(|x| f16::from_f32(*x as f32))
             .collect::<Vec<_>>();
-        gate_data.copy_from_slice(reslice(&src));        
+        gate_data.copy_from_slice(reslice(&src));
 
         let mut up_rtensor = rustTensor::alloc(rlayout, &[1, 64], Blob::new);
         let up_data = up_rtensor.physical_mut();
         up_data.copy_from_slice(reslice(&src));
 
         let gate = to_ctensor(&gate_rtensor);
-
 
         let up = to_ctensor(&up_rtensor);
 

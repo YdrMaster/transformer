@@ -1,6 +1,6 @@
 use common::{f16, utok, Blob};
+use operators::cndrv::{memcpy_d2h, DevByte, Queue};
 use sample::SampleArgs;
-use operators::cndrv::{DevByte, Queue, memcpy_d2h};
 use tensor::reslice;
 
 pub fn sample_cpu(

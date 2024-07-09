@@ -150,6 +150,34 @@ impl InferenceArgs {
     }
 }
 
+fn parse_range(s: Option<&str>, count: usize) -> Vec<c_int> {
+    if let Some(nv) = s {
+        if let Some((start, end)) = nv.split_once("..") {
+            let start = start.trim();
+            let end = end.trim();
+            let start = if start.is_empty() {
+                0
+            } else {
+                start.parse::<c_int>().unwrap()
+            };
+            let end = if end.is_empty() {
+                count as _
+            } else {
+                end.parse::<c_int>().unwrap()
+            };
+            (start..end).collect()
+        } else {
+            nv.split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.parse::<c_int>().unwrap())
+                .collect()
+        }
+    } else {
+        vec![]
+    }
+}
+
 /// 模型相关的推理任务。
 trait Task: Sized {
     /// 解析推理参数。
