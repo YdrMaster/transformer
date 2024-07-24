@@ -136,7 +136,6 @@ impl KernelsA for CambriconKernels {
                 epsilon,
                 queue.as_raw() as *mut ::std::os::raw::c_void,
             );
-
             // Destroy the SwigluDescriptor
             destroyTensorDescriptor(x.layout);
             destroyTensorDescriptor(y.layout);
@@ -165,7 +164,7 @@ impl KernelsA for CambriconKernels {
                 theta,
                 queue.as_raw() as *mut ::std::os::raw::c_void,
             );
-
+            queue.synchronize();
             // Destroy the SwigluDescriptor
             destroyTensorDescriptor(t.layout);
             destroyTensorDescriptor(pos.layout);
@@ -221,7 +220,6 @@ impl KernelsA for CambriconKernels {
                 att,
                 queue.as_raw() as *mut ::std::os::raw::c_void,
             );
-
             // Destroy the SwigluDescriptor
             destroyTensorDescriptor(att.layout);
         }
@@ -246,7 +244,6 @@ impl KernelsA for CambriconKernels {
                 up,
                 queue.as_raw() as *mut ::std::os::raw::c_void,
             );
-
             // Destroy the SwigluDescriptor
             destroyTensorDescriptor(gate.layout);
             destroyTensorDescriptor(up.layout);
@@ -295,7 +292,6 @@ impl KernelsB for CambriconKernels {
         I: IntoIterator<Item = utok>,
     {
         gather::gather(x, table, tokens, queue);
-        // queue.synchronize();
     }
 }
 
