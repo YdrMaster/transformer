@@ -1,4 +1,4 @@
-﻿use std::env;
+﻿use std::{env,process};
 use std::path::PathBuf;
 
 fn main() {
@@ -10,10 +10,17 @@ fn main() {
         neuware.define();
     }
 
+    let infini_root = env::var("INFINI_ROOT").unwrap_or_else(|_| {
+        eprintln!("INFINI_ROOT environment variable is not set.");
+        process::exit(1)
+    });
+
     // Tell cargo to tell rustc to link the shared library.
-    println!("cargo:rustc-link-search=native=/home/duanchenjie/workspace/operators/build/linux/x86_64/release");
-    // 链接动态库，不要包含前缀 lib 和后缀 .so
-    println!("cargo:rustc-link-lib=dylib=operators"); // 动态库名为 liboperators.so
+    println!("cargo:rustc-link-search=native={}", infini_root);
+
+    // Link the operators library without including the prefix lib and the suffix .so
+    println!("cargo:rustc-link-lib=dylib=operators");
+    // Link the cnnl_extra library
     println!("cargo:rustc-link-lib=dylib=cnnl_extra");
     // Link the OpenMP library
     println!("cargo:rustc-link-lib=dylib=gomp");    
@@ -22,6 +29,7 @@ fn main() {
     // and lets you build up options for the resulting bindings.
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
+        .clang_arg(format!("-I{}/include", infini_root))
         // Generate rust style enums.
         .default_enum_style(bindgen::EnumVariation::Rust {
             non_exhaustive: true,

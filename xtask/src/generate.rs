@@ -41,8 +41,9 @@ impl Task for GenerateArgs {
         let mut steps = 0;
         let mut generator = service.generate(&*prompt, Some(self.inference.sample_args()));
 
-        let time = Instant::now();
+        let mut time: Option<Instant> = None;
         while let Some(s) = generator.decode().await {
+            time.get_or_insert_with(Instant::now);
             match &*s {
                 "\\n" => println!(),
                 _ => print_now!("{s}"),
@@ -52,9 +53,10 @@ impl Task for GenerateArgs {
                 break;
             }
         }
-        let time = time.elapsed();
+        if let Some(time) = time {
+            println!();
+            println!("Time elapsed: {:?}/tok", time.elapsed().div_f32(steps as f32));
+        };
 
-        println!();
-        println!("Time elapsed: {:?}/tok", time.div_f32(steps as f32));
     }
 }

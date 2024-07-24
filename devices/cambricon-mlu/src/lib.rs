@@ -5,15 +5,13 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 mod gather;
 mod sample;
 
-use cndrv::{ContextSpore, CurrentCtx, DevByte};
 use common::utok;
-pub use operators::{cambricon_mlu::Handle as Mlu, cndrv};
+pub use operators::{cambricon_mlu::Handle as Mlu, cndrv, cndrv::{ContextSpore, CurrentCtx, DevByte, AsRaw}, QueueOf};
 pub use sample::sample_cpu;
 
 // pub type CTensor = Tensor;
 // use tensor::Tensor;
 use digit_layout::DigitLayout;
-use operators::{cndrv::AsRaw, QueueOf};
 use std::ops::{Deref, DerefMut};
 
 pub use common_devices::{Kernels, KernelsA, KernelsB, SliceOn};
@@ -202,6 +200,8 @@ impl KernelsA for CambriconKernels {
                 queue.as_raw() as *mut ::std::os::raw::c_void,
             );
 
+            queue.synchronize();
+
             // Destroy the SwigluDescriptor
             destroyTensorDescriptor(c.layout);
             destroyTensorDescriptor(a.layout);
@@ -252,24 +252,6 @@ impl KernelsA for CambriconKernels {
             destroyTensorDescriptor(up.layout);
         }
     }
-}
-
-impl KernelsB for CambriconKernels {
-    type Handle = Mlu;
-
-    fn gather<T, U, I>(
-        &self,
-        x: &mut rustTensor<T>,
-        table: &rustTensor<U>,
-        tokens: I,
-        queue: &QueueOf<Self::Handle>,
-    ) where
-        T: DerefMut<Target = SliceOn<Self::Handle>>,
-        U: Deref<Target = [u8]>,
-        I: IntoIterator<Item = utok>,
-    {
-        gather::gather(x, table, tokens, queue);
-    }
 
     fn reform<T, U>(
         &self,
@@ -295,6 +277,25 @@ impl KernelsB for CambriconKernels {
             destroyTensorDescriptor(dst.layout);
             destroyTensorDescriptor(src.layout);
         }
+    }    
+}
+
+impl KernelsB for CambriconKernels {
+    type Handle = Mlu;
+
+    fn gather<T, U, I>(
+        &self,
+        x: &mut rustTensor<T>,
+        table: &rustTensor<U>,
+        tokens: I,
+        queue: &QueueOf<Self::Handle>,
+    ) where
+        T: DerefMut<Target = SliceOn<Self::Handle>>,
+        U: Deref<Target = [u8]>,
+        I: IntoIterator<Item = utok>,
+    {
+        gather::gather(x, table, tokens, queue);
+        // queue.synchronize();
     }
 }
 

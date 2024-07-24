@@ -246,8 +246,14 @@ trait Task: Sized {
                     .unwrap()
                     .into_vec(llama_cn::cndrv::Device::count)
                 {
-                    [] => todo!(),
-                    &[_n] => todo!(),
+                    [] => {
+                        use llama_cn::{cndrv::Device, Transformer as M};
+                        runtime.block_on(self.typed::<M>(Device::new(0)));
+                    }
+                    &[n] => {
+                        use llama_cn::{cndrv::Device, Transformer as M};
+                        runtime.block_on(self.typed::<M>(Device::new(n)));
+                    }
                     _list => todo!(),
                 },
                 _ => panic!("Turbo environment not detected"),
