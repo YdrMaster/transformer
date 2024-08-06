@@ -1,13 +1,10 @@
 #![deny(warnings)]
 
-mod bpe;
 mod normalizer;
-mod special;
 mod vocab_txt;
 
-/// `utok` for token id.
-#[allow(non_camel_case_types)]
-pub type utok = u32;
+use tokeneer::Method;
+pub use tokeneer::{utok, Bpe, Tokeneer};
 
 pub trait Tokenize {
     fn vocab_size(&self) -> usize;
@@ -15,17 +12,22 @@ pub trait Tokenize {
     fn decode(&self, token: utok) -> &str;
 }
 
-pub trait Method {
-    fn unk_token(&self) -> utok;
-    fn vocab_size(&self) -> usize;
-    fn internal_special(&self) -> impl IntoIterator<Item = (&str, utok)>;
-    fn encode<'a>(&'a self, text: &'a str) -> impl IntoIterator<Item = utok> + 'a;
-    fn decode(&self, token: utok) -> &[u8];
+impl Tokenize for Tokeneer<Bpe> {
+    #[inline]
+    fn vocab_size(&self) -> usize {
+        self.internal().vocab_size()
+    }
+    #[inline]
+    fn encode(&self, text: &str) -> Vec<utok> {
+        self.encode(text)
+    }
+    #[inline]
+    fn decode(&self, token: utok) -> &str {
+        unsafe { std::str::from_utf8_unchecked(self.internal().decode(token)) }
+    }
 }
 
-pub use bpe::BPE;
 pub use normalizer::{BPECommonNormalizer, Normalizer};
-pub use special::Tokenizer;
 pub use vocab_txt::VocabTxt;
 
 const fn as_byte_token(piece: &[u8]) -> Option<u8> {

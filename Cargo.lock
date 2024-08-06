@@ -1478,9 +1478,9 @@ dependencies = [
 
 [[package]]
 name = "safetensors"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ced76b22c7fba1162f11a5a75d9d8405264b467a07ae0c9c29be119b9297db9"
+checksum = "7725d4d98fa515472f43a6e2bbf956c48e06b89bb50593a040e5945160214450"
 dependencies = [
  "serde",
  "serde_json",
@@ -1574,6 +1574,7 @@ dependencies = [
  "llama-cpu",
  "log",
  "lru",
+ "memmap2",
  "rangemap",
  "tensor",
  "tokenizer",
@@ -1724,12 +1725,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokeneer"
+version = "0.0.0"
+source = "git+https://github.com/YdrMaster/tokeneer?rev=8a9c60d#8a9c60dee6e1aa77049052e2b6c6f6dd3c1507f5"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "tokenizer"
 version = "0.0.0"
 dependencies = [
  "memmap2",
  "patricia_tree",
- "regex",
+ "tokeneer",
 ]
 
 [[package]]

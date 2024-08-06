@@ -9,4 +9,4 @@ authors = ["YdrMaster <ydrml@hotmail.com>"]
 [dependencies]
 memmap2.workspace = true
 patricia_tree = "0.8"
-regex = "1.10"
+tokeneer = { git = "https://github.com/YdrMaster/tokeneer", rev = "8a9c60d" }

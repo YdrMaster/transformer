@@ -8,10 +8,11 @@ use chat_template::ChatTemplate;
 use session::{Dispatcher, Generator};
 use std::{
     fmt::{self, Debug},
+    fs::File,
     path::Path,
     sync::Arc,
 };
-use tokenizer::{BPECommonNormalizer, Normalizer, Tokenize, Tokenizer, VocabTxt, BPE};
+use tokenizer::{BPECommonNormalizer, Bpe, Normalizer, Tokeneer, Tokenize, VocabTxt};
 use tokio::task::JoinHandle;
 
 pub use chat_template::Message;
@@ -152,10 +153,8 @@ fn template(model_dir: impl AsRef<Path>) -> ChatTemplate {
 
 fn normalizer(model_dir: impl AsRef<Path>) -> Box<dyn Normalizer + Send + Sync> {
     use std::io::ErrorKind::NotFound;
-    match BPE::from_tokenizer_model(model_dir.as_ref().join("tokenizer.model")) {
-        Ok(_) => return Box::new(BPECommonNormalizer {}),
-        Err(e) if e.kind() == NotFound => {}
-        Err(e) => panic!("{e:?}"),
+    if model_dir.as_ref().join("tokenizer.model").is_file() {
+        return Box::new(BPECommonNormalizer {});
     }
     match VocabTxt::from_txt_file(model_dir.as_ref().join("vocabs.txt")) {
         Ok(_) => return Box::new(()),
@@ -167,8 +166,10 @@ fn normalizer(model_dir: impl AsRef<Path>) -> Box<dyn Normalizer + Send + Sync> 
 
 fn tokenizer(model_dir: impl AsRef<Path>) -> Box<dyn Tokenize + Send + Sync> {
     use std::io::ErrorKind::NotFound;
-    match BPE::from_tokenizer_model(model_dir.as_ref().join("tokenizer.model")) {
-        Ok(bpe) => return Box::new(Tokenizer::new(bpe)),
+    let file = File::open(model_dir.as_ref().join("tokenizer.model"))
+        .and_then(|f| unsafe { memmap2::Mmap::map(&f) });
+    match file {
+        Ok(f) => return Box::new(Tokeneer::new(Bpe::from_tokenizer_model(&f))),
         Err(e) if e.kind() == NotFound => {}
         Err(e) => panic!("{e:?}"),
     }
