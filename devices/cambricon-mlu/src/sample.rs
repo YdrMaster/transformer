@@ -10,6 +10,7 @@ pub fn sample_cpu(
     _queue: &Queue,
 ) -> Vec<utok> {
     let mut host = Blob::new(logits.len());
+    _queue.synchronize();
     memcpy_d2h(&mut host, logits);
 
     let logits: &[f16] = reslice(&host);

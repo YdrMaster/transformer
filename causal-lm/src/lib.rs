@@ -6,7 +6,7 @@ mod query_context;
 
 use common::{upos, utok};
 use digit_layout::types::U32;
-use std::path::Path;
+use std::{path::Path, time::Duration};
 use tensor::{udim, Tensor};
 
 pub use decoding::DecodingMeta;
@@ -125,7 +125,14 @@ where
     let mut prompt = prompt.to_vec();
     let mut pos = 0;
 
+    // 初始化变量用于性能分析
+    let mut time = Duration::ZERO;
+    let mut steps = 0;
+
     while prompt != [model.eos_token()] {
+        // 记录 token 处理开始时间
+        let start = Instant::now();
+
         let token_embedded = CausalLM::token_embed(&model, prompt.iter().copied());
 
         let queries = [QueryContext {
@@ -146,8 +153,25 @@ where
         }];
         let tokens = CausalLM::sample(&model, args, logits);
 
-        println!("{:?}", tokens);
+        // 只计算从第二个 token 开始的时间
+        if steps > 0 {
+            time += start.elapsed();
+        }
+        steps += 1;
+
+        // println!("{:?}", tokens);
         pos += prompt.len() as upos;
         prompt = tokens;
+
+        if steps > 500 {
+            break;
+        }
     }
+
+    // 计算并输出平均处理时间
+    steps -= 1;
+    println!(
+        "steps = {steps}, average decoding time = {:?}",
+        time.div_f32(steps as _)
+    );
 }

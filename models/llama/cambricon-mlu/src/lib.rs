@@ -207,6 +207,8 @@ impl CausalLM for Transformer {
                 compute,
             );
 
+            // compute.synchronize();
+
             logits
         })
     }
@@ -331,6 +333,10 @@ impl<'a> llama::ComputeStream for ComputeStream<'a> {
         );
     }
 
+    fn sync(&self) {
+        self.compute.synchronize();
+    }
+
     fn layers(
         &self,
     ) -> impl Iterator<Item = impl llama::LLamaLayer<Byte = <Self::Handle as llama::Handle>::Byte>>
@@ -375,4 +381,17 @@ impl<'a> llama::LLamaLayer for LlamaLayer<'a> {
     fn mlp_down(&self) -> Tensor<Self::Storage<'_>> {
         access!(self, mlp_down)
     }
+}
+
+#[test]
+fn test_infer() {
+   cndrv::init();
+    let device = cndrv::Device::new(0);
+    causal_lm::test_impl::<Transformer>(
+        device,
+        &[
+            29966, 29989, 1792, 29989, 29958, 13, 29903, 388, 376, 18567, 29908, 304, 592, 21106,
+            29879, 5299, 29989, 465, 22137, 29989, 29958, 13,
+        ],   
+    );
 }

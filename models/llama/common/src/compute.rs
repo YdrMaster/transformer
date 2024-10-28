@@ -21,6 +21,7 @@ pub trait ComputeStream {
 
     fn kernels(&self) -> &impl Kernels<Self::Handle>;
     fn queue(&self) -> &QueueOf<Self::Handle>;
+    fn sync(&self);
     fn constant(&self) -> ComputeConst;
 
     fn debug<T>(tensor: &Tensor<T>)
@@ -89,6 +90,7 @@ pub trait ComputeStream {
                 .rms_norm(&mut x1, &x, &params.att_layernorm(), epsilon, queue);
             self.kernels()
                 .mat_mul(&mut qkv, 0., &x1, &params.att_qkv(), 1., queue);
+            self.sync();
 
             let (q, k, v) = split!(qkv; [1]: d, dkv, dkv);
             let mut q = q.reshape(&[nt, nh, dh]);
@@ -147,6 +149,7 @@ pub trait ComputeStream {
                 self.kernels()
                     .mat_mul(&mut x2, 0., &att.reshape(shape_att0), &v_att, 1., queue);
 
+                // self.sync();
                 self.kernels().reform(&mut o, &x2.reshape(shape_q0), queue);
             }
 

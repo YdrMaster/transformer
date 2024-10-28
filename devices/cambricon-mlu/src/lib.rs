@@ -128,6 +128,7 @@ impl KernelsA for CambriconKernels {
             let x = to_ctensor(x);
             let w = to_ctensor(w);
 
+            // queue.synchronize();
             rmsNorm(
                 self.rms_norm,
                 y,
@@ -136,6 +137,7 @@ impl KernelsA for CambriconKernels {
                 epsilon,
                 queue.as_raw() as *mut ::std::os::raw::c_void,
             );
+            // queue.synchronize();
             // Destroy the SwigluDescriptor
             destroyTensorDescriptor(x.layout);
             destroyTensorDescriptor(y.layout);
@@ -157,6 +159,7 @@ impl KernelsA for CambriconKernels {
             let t = to_ctensor(t);
             let pos = to_ctensor(pos);
 
+            // queue.synchronize();
             rotaryEmbedding(
                 self.rope,
                 t,
@@ -164,7 +167,7 @@ impl KernelsA for CambriconKernels {
                 theta,
                 queue.as_raw() as *mut ::std::os::raw::c_void,
             );
-            queue.synchronize();
+            // queue.synchronize();
             // Destroy the SwigluDescriptor
             destroyTensorDescriptor(t.layout);
             destroyTensorDescriptor(pos.layout);
@@ -189,6 +192,7 @@ impl KernelsA for CambriconKernels {
             let a = to_ctensor(a);
             let b = to_ctensor(b);
 
+            // queue.synchronize();
             matmul(
                 self.mat_mul,
                 c,
@@ -199,12 +203,12 @@ impl KernelsA for CambriconKernels {
                 queue.as_raw() as *mut ::std::os::raw::c_void,
             );
 
-            queue.synchronize();
+            // queue.synchronize();
 
             // Destroy the SwigluDescriptor
-            destroyTensorDescriptor(c.layout);
-            destroyTensorDescriptor(a.layout);
-            destroyTensorDescriptor(b.layout);
+            // destroyTensorDescriptor(c.layout);
+            // destroyTensorDescriptor(a.layout);
+            // destroyTensorDescriptor(b.layout);
         }
     }
 

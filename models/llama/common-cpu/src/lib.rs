@@ -72,6 +72,10 @@ impl ComputeStream for Transformer {
         println!("{tensor}");
     }
 
+    fn sync(&self) {
+        println!("sync");
+    }
+
     #[inline]
     fn layers(
         &self,
