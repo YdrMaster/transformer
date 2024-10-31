@@ -19,7 +19,7 @@ test-utils.path = "test-utils"
 
 ggus = { git = "https://github.com/YdrMaster/gguf", rev = "981285c" }
 ndarray-layout = { git = "https://github.com/YdrMaster/ndarray-layout", rev = "68ab1db" }
-operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "93d84ae", default-features = false }
+operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "4a5b270", default-features = false }
 
 build-script-cfg = "0.0"
 search-cuda-tools = { git = "https://github.com/YdrMaster/cuda-driver", rev = "5a8d0c8" }
