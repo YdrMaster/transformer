@@ -1,6 +1,8 @@
 ﻿use crate::{Operators, RandomSample, Weights};
 use gguf::GGufModel;
-use llama::{ext::f16, LlamaArgs, LlamaMeta, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
+use llama::{
+    ext::ggml_quants::f16, LlamaArgs, LlamaMeta, LlamaRequest, LlamaStorage, LlamaWorker, Tensor,
+};
 use operators::{
     common_cpu::{Blob, Cpu, ThisThread},
     random_sample::{KVPair, SampleArgs},

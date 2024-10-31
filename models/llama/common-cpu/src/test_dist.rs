@@ -1,6 +1,6 @@
 ﻿use crate::{Operators, RandomSample, Weights};
 use gguf::GGufModel;
-use llama::{ext::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
+use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
 use operators::{
     all_reduce::common_cpu::Operator as AllReduce,
     common_cpu::{Blob, Cpu, InprocNode, ThisThread},
@@ -59,7 +59,7 @@ fn test_dist() {
                 *start = range.end;
 
                 let mut meta = model.meta.clone();
-                meta.distribute(len, count);
+                meta.distribute(range.clone(), count);
 
                 let model = &model;
 

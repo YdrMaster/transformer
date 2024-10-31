@@ -2,6 +2,7 @@ mod args;
 mod compute;
 mod storage;
 
+use gguf::ggml_quants::digit_layout::DigitLayout;
 use std::ops::{Range, RangeBounds};
 
 pub use args::{Args as LlamaArgs, Request as LlamaRequest};
@@ -13,18 +14,14 @@ pub mod ext {
     pub use gguf::{
         ext::{utok, Mmap},
         ggml_quants,
-        ggml_quants::{
-            digit_layout::{types as primitive, DigitLayout},
-            f16, types as quant,
-        },
     };
 }
 
 #[derive(Clone, Debug)]
 pub struct LlamaMeta {
-    pub dt_embd: ext::DigitLayout,
-    pub dt_norm: ext::DigitLayout,
-    pub dt_mat: ext::DigitLayout,
+    pub dt_embd: DigitLayout,
+    pub dt_norm: DigitLayout,
+    pub dt_mat: DigitLayout,
 
     pub nblk: usize,
     pub nctx: usize,
@@ -46,7 +43,8 @@ pub enum TensorUsage {
 }
 
 impl LlamaMeta {
-    pub fn distribute(&mut self, len: usize, count: usize) {
+    pub fn distribute(&mut self, range: impl RangeBounds<usize>, count: usize) {
+        let len = normalize(range, count).len();
         assert!(0 < len && len <= count);
         assert_eq!(self.nkvh % count, 0);
         assert_eq!(self.di % count, 0);

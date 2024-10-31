@@ -2,7 +2,10 @@ mod fmt;
 mod operators;
 mod split;
 
-use ggus::ggml_quants::{digit_layout::DigitLayout, DataBlock};
+use ggus::ggml_quants::{
+    digit_layout::{self, DigitLayout},
+    DataBlock,
+};
 use ndarray_layout::{ArrayLayout, Endian::BigEndian};
 use std::{
     ops::{Deref, DerefMut, Range},
@@ -113,6 +116,19 @@ impl<T> Tensor<T> {
             unreachable!()
         };
         Some(size * dt_size(self.dt))
+    }
+
+    #[inline]
+    pub fn to_bytes_layout(self) -> Self {
+        let mut shape = self.shape().to_vec();
+        let mut strides = self.strides().to_vec();
+        shape.push(dt_size(self.dt));
+        strides.push(1);
+        Self {
+            dt: digit_layout::types::U8,
+            layout: ArrayLayout::new(&shape, &strides, self.offset()),
+            physical: self.physical,
+        }
     }
 }
 
@@ -225,6 +241,9 @@ where
         rearrange::{common_cpu::Operator as Rearrange, Args},
         Operator as _,
     };
+
+    let mut dst = dst.map_slice_mut().to_bytes_layout();
+    let src = src.map_slice().to_bytes_layout();
 
     Rearrange::new(&Cpu)
         .launch(

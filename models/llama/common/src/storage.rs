@@ -2,7 +2,7 @@
 use common::{borrow, own, Contiguous};
 use gguf::{ggml_quants::digit_layout::DigitLayout, GGufMetaMapExt, GGufModel};
 use std::ops::{DerefMut, RangeBounds};
-use tensor::{rearrange, split, Tensor};
+use tensor::{block_size, rearrange, split, Tensor};
 
 #[derive(Clone)]
 pub struct Storage<T> {
@@ -175,7 +175,7 @@ impl<'w> BlkStorage<&'w [u8]> {
                 let nh = nh / count;
                 let o = o.slice(1, nh * start, 1, nh * len);
 
-                let mut o_ = Tensor::new(o.dt(), o.shape()).map(&mut f);
+                let mut o_ = Tensor::new(o.dt(), &[d, nh, dh]).map(&mut f);
                 rearrange(&mut o_, &o);
                 own(o_.take())
             },
@@ -207,10 +207,10 @@ impl<'w> BlkStorage<&'w [u8]> {
                 borrow(self.ffn_down)
             } else {
                 let down = tensor(dt_mat, &[d, di], self.ffn_down);
-                let di = di / count;
-                let down = down.slice(1, di * start, 1, di * len);
+                let p = di / count / block_size(dt_mat);
+                let down = down.slice(1, p * start, 1, p * len);
 
-                let mut down_ = Tensor::new(down.dt(), down.shape()).map(&mut f);
+                let mut down_ = Tensor::new(down.dt(), &[d, di / count]).map(&mut f);
                 rearrange(&mut down_, &down);
                 own(down_.take())
             },

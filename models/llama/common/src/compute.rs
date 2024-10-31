@@ -44,7 +44,7 @@ pub trait Operators {
     }
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BlkWeight {
     AttnNorm,
     AttnQKV,

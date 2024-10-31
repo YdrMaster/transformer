@@ -1,10 +1,7 @@
-use llama::ext::{
-    f16,
-    ggml_quants::{self, DataBlock, QuantExt},
-    DigitLayout,
-};
 use llama::{
-    BlkWeight, Contiguous, LlamaBlkStorage, LlamaStorage, Tensor, TensorUsage::Computation,
+    ext::ggml_quants::{self, digit_layout::DigitLayout, f16, DataBlock, QuantExt},
+    BlkWeight, Contiguous, LlamaBlkStorage, LlamaStorage, Tensor,
+    TensorUsage::Computation,
     WeightLoader,
 };
 use operators::{
@@ -37,13 +34,16 @@ pub struct Weights<'w> {
     weight_cache: RefCell<WeightCache>,
     dt_embd: DigitLayout,
     dt_mat: DigitLayout,
+    size_qkv: usize,
+    size_o: usize,
+    size_gate_up: usize,
+    size_down: usize,
 }
 
 pub struct WeightCache {
     cache: Blob,
     cached_weight: BlkWeight,
     cached_weight_iblk: usize,
-    used: Range<usize>,
 }
 macro_rules! op {
     ($name:ident) => {
@@ -81,59 +81,67 @@ impl<'w> Weights<'w> {
         count: usize,
     ) -> Self {
         let LlamaStorage {
+            meta,
             output_norm,
             output,
             blocks,
             ..
         } = model;
-        let weight_cache = if model.meta.dt_embd == model.meta.dt_mat {
+
+        let blks = blocks
+            .iter()
+            .map(|blk| blk.distribute(meta, range.clone(), count, Blob::new))
+            .collect::<Box<_>>();
+
+        let mut meta = meta.clone();
+        meta.distribute(range.clone(), count);
+        let size_qkv = meta.attn_qkv(Computation).take();
+        let size_o = meta.attn_o(Computation).take();
+        let size_gate_up = meta.ffn_gate_up(Computation).take();
+        let size_down = meta.ffn_down(Computation).take();
+
+        let weight_cache = if meta.dt_embd == meta.dt_mat {
             RefCell::new(WeightCache {
                 cache: Blob::new(0),
                 cached_weight: BlkWeight::AttnQKV,
                 cached_weight_iblk: 0,
-                used: 0..0,
             })
         } else {
-            let max_size = [
-                model.meta.attn_qkv(Computation).take(),
-                model.meta.attn_o(Computation).take(),
-                model.meta.ffn_gate_up(Computation).take()
-                    + model.meta.ffn_down(Computation).take(),
-            ]
-            .into_iter()
-            .max()
-            .unwrap();
+            let max_size = [size_qkv, size_o, size_gate_up + size_down]
+                .into_iter()
+                .max()
+                .unwrap();
             let mut cache = Blob::new(max_size);
-            let cache_used = dequant_data(
-                model.meta.dt_mat,
-                model.meta.dt_embd,
-                blocks[0].attn_qkv,
-                &mut cache,
+            dequant(
+                meta.dt_mat,
+                meta.dt_embd,
+                &blks[0].attn_qkv,
+                &mut cache[..size_qkv],
             );
 
             RefCell::new(WeightCache {
                 cache,
                 cached_weight: BlkWeight::AttnQKV,
                 cached_weight_iblk: 0,
-                used: 0..cache_used,
             })
         };
         Self {
-            blks: blocks
-                .iter()
-                .map(|blk| blk.distribute(&model.meta, range.clone(), count, Blob::new))
-                .collect(),
+            blks,
             output_norm,
             output,
             weight_cache,
-            dt_embd: model.meta.dt_embd,
-            dt_mat: model.meta.dt_mat,
+            dt_embd: meta.dt_embd,
+            dt_mat: meta.dt_mat,
+            size_qkv,
+            size_o,
+            size_gate_up,
+            size_down,
         }
     }
 }
 
 pub enum Dequant<'s> {
-    Buffered(Ref<'s, WeightCache>, Range<usize>),
+    Cached(Ref<'s, WeightCache>, Range<usize>),
     Borrowed(&'s [u8]),
 }
 
@@ -142,36 +150,26 @@ impl Deref for Dequant<'_> {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Dequant::Buffered(cache, Range { start, end }) => &cache.cache[*start..*end],
-            Dequant::Borrowed(data) => data,
+            Self::Cached(cache, range) => &cache.cache[range.clone()],
+            Self::Borrowed(data) => data,
         }
     }
 }
 
 // return the dst_size, quant_cache can longer than dst_size
-fn dequant_data(
-    dt_mat: DigitLayout,
-    dt_embd: DigitLayout,
-    data: &[u8],
-    quant_cache: &mut [u8],
-) -> usize {
+fn dequant(dt_src: DigitLayout, dt_tgt: DigitLayout, src: &[u8], tgt: &mut [u8]) {
     macro_rules! inner_case {
-            ($dequant_ty:ty,$($quant_ty:ty),*) => {
-                match dt_mat {
+            ($dequant_ty:ty; $($quant_ty:ty),*) => {
+                match dt_src {
                     $(
                         <$quant_ty>::ID => {
-                            assert!(data.len() % size_of::<$quant_ty>() == 0);
-                            let src_len = data.len() / size_of::<$quant_ty>();
+                            assert_eq!(src.len() % size_of::<$quant_ty>(), 0);
+                            let src_len = src.len() / size_of::<$quant_ty>();
                             let dst_len = src_len * <$quant_ty>::COUNT;
-                            assert!(quant_cache.len() >= dst_len * size_of::<$dequant_ty>());
-                            let src = unsafe {
-                                from_raw_parts(data.as_ptr().cast::<$quant_ty>(), src_len)
-                            };
-                            let dst = unsafe {
-                                from_raw_parts_mut(quant_cache.as_mut_ptr().cast::<$dequant_ty>(), dst_len)
-                            };
+                            assert_eq!(tgt.len(), dst_len * size_of::<$dequant_ty>());
+                            let src = unsafe { from_raw_parts(src.as_ptr().cast::<$quant_ty>(), src_len) };
+                            let dst = unsafe { from_raw_parts_mut(tgt.as_mut_ptr().cast::<$dequant_ty>(), dst_len) };
                             <$quant_ty>::dequantize_slice(dst, src).expect("dequant failed");
-                            dst_len * size_of::<$dequant_ty>()
                         },
                     )*
                     _ => panic!("unsupported dequantization source"),
@@ -179,10 +177,11 @@ fn dequant_data(
             }
         }
 
-    assert!(dt_embd != dt_mat);
-    match dt_embd {
-        f16::ID => inner_case!(f16, ggml_quants::Q8_0),
-        f32::ID => inner_case!(f32, ggml_quants::Q8_0),
+    use ggml_quants::{Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1};
+    assert!(dt_tgt != dt_src);
+    match dt_tgt {
+        f16::ID => inner_case!(f16; Q8_0, Q8_1, Q5_0, Q5_1, Q4_0, Q4_1),
+        f32::ID => inner_case!(f32; Q8_0, Q8_1, Q5_0, Q5_1, Q4_0, Q4_1),
         _ => panic!("unsupported dequantization target"),
     }
 }
@@ -201,87 +200,78 @@ impl WeightLoader for Weights<'_> {
         iblk: usize,
         _queue: &QueueOf<Self::Hardware>,
     ) -> Self::Memory<'_> {
-        let blk = &self.blks[iblk];
+        let &Self {
+            ref blks,
+            ref weight_cache,
+            dt_embd,
+            dt_mat,
+            size_qkv,
+            size_o,
+            size_gate_up,
+            size_down,
+            ..
+        } = self;
+        let LlamaBlkStorage {
+            attn_norm,
+            attn_qkv,
+            attn_o,
+            ffn_norm,
+            ffn_gate_up,
+            ffn_down,
+        } = &blks[iblk];
 
-        let mut is_mat = false;
-        let data = match which {
-            BlkWeight::AttnQKV => {
-                is_mat = true;
-                &blk.attn_qkv
-            }
-            BlkWeight::AttnO => {
-                is_mat = true;
-                &blk.attn_o
-            }
-            BlkWeight::FfnGateUp => {
-                is_mat = true;
-                &blk.ffn_gate_up
-            }
-            BlkWeight::FfnDown => {
-                is_mat = true;
-                &blk.ffn_down
-            }
-            BlkWeight::FfnNorm => &blk.ffn_norm,
-            BlkWeight::AttnNorm => &blk.attn_norm,
+        use BlkWeight::{AttnNorm, AttnO, AttnQKV, FfnDown, FfnGateUp, FfnNorm};
+        use Dequant::{Borrowed, Cached};
+
+        #[rustfmt::skip]
+        match which {
+            AttnNorm                       => return Borrowed(attn_norm  ),
+            AttnQKV   if dt_mat == dt_embd => return Borrowed(attn_qkv   ),
+            AttnO     if dt_mat == dt_embd => return Borrowed(attn_o     ),
+            FfnNorm                        => return Borrowed(ffn_norm   ),
+            FfnGateUp if dt_mat == dt_embd => return Borrowed(ffn_gate_up),
+            FfnDown   if dt_mat == dt_embd => return Borrowed(ffn_down   ),
+            _ => {}
         };
-        let cached_weight = self.weight_cache.borrow().cached_weight;
-        let cached_weight_iblk = self.weight_cache.borrow().cached_weight_iblk;
-        if is_mat && (self.dt_mat != self.dt_embd) {
-            match which {
-                BlkWeight::AttnQKV | BlkWeight::AttnO => {
-                    if which != cached_weight || iblk != cached_weight_iblk {
-                        let mut weight_cache = self.weight_cache.borrow_mut();
-                        let used =
-                            dequant_data(self.dt_mat, self.dt_embd, data, &mut weight_cache.cache);
-                        weight_cache.cached_weight = which;
-                        weight_cache.cached_weight_iblk = iblk;
-                        weight_cache.used = 0..used;
-                    }
-                    Dequant::Buffered(
-                        self.weight_cache.borrow(),
-                        self.weight_cache.borrow().used.clone(),
-                    )
-                }
-                BlkWeight::FfnGateUp | BlkWeight::FfnDown => {
-                    if !(cached_weight == which
-                        || (cached_weight == BlkWeight::FfnGateUp && which == BlkWeight::FfnDown)
-                        || (cached_weight == BlkWeight::FfnDown && which == BlkWeight::FfnGateUp))
-                        || iblk != cached_weight_iblk
-                    {
-                        let mut weight_cache = self.weight_cache.borrow_mut();
-                        let used1 = dequant_data(
-                            self.dt_mat,
-                            self.dt_embd,
-                            &blk.ffn_gate_up,
-                            &mut weight_cache.cache,
-                        );
-                        let used2 = dequant_data(
-                            self.dt_mat,
-                            self.dt_embd,
-                            &blk.ffn_down,
-                            &mut weight_cache.cache[used1..],
-                        );
-                        weight_cache.cached_weight = which;
-                        weight_cache.cached_weight_iblk = iblk;
-                        weight_cache.used = used1..used1 + used2;
-                    }
-                    match which {
-                        BlkWeight::FfnGateUp => Dequant::Buffered(
-                            self.weight_cache.borrow(),
-                            0..self.weight_cache.borrow().used.start,
-                        ),
-                        BlkWeight::FfnDown => Dequant::Buffered(
-                            self.weight_cache.borrow(),
-                            self.weight_cache.borrow().used.clone(),
-                        ),
-                        _ => unreachable!(),
-                    }
-                }
-                _ => unreachable!(),
+
+        let current_which = weight_cache.borrow().cached_weight;
+        let current_iblk = weight_cache.borrow().cached_weight_iblk;
+        if iblk != current_iblk
+            || match which {
+                FfnGateUp | FfnDown => !matches!(current_which, FfnGateUp | FfnDown),
+                _ => current_which != which,
             }
-        } else {
-            Dequant::Borrowed(data)
+        {
+            let mut weight_cache = weight_cache.borrow_mut();
+            let WeightCache {
+                cache,
+                cached_weight,
+                cached_weight_iblk,
+            } = &mut *weight_cache;
+            *cached_weight = which;
+            *cached_weight_iblk = iblk;
+            #[rustfmt::skip]
+            match which {
+                AttnQKV => dequant(dt_mat, dt_embd, attn_qkv   , &mut cache[..size_qkv]),
+                AttnO   => dequant(dt_mat, dt_embd, attn_o     , &mut cache[..size_o  ]),
+                FfnGateUp | FfnDown => {
+                           dequant(dt_mat, dt_embd, ffn_gate_up, &mut cache[..size_gate_up]);
+                           dequant(dt_mat, dt_embd, ffn_down   , &mut cache[size_gate_up..][..size_down]);
+                }
+                AttnNorm | FfnNorm => unreachable!(),
+            };
         }
+
+        Cached(
+            weight_cache.borrow(),
+            match which {
+                AttnQKV => 0..size_qkv,
+                AttnO => 0..size_o,
+                FfnGateUp => 0..size_gate_up,
+                FfnDown => size_gate_up..size_gate_up + size_down,
+                AttnNorm | FfnNorm => unreachable!(),
+            },
+        )
     }
 
     #[inline]
