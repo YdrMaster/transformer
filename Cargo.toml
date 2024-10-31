@@ -17,7 +17,7 @@ tensor.path = "tensor"
 causal-lm.path = "causal-lm"
 test-utils.path = "test-utils"
 
-ggus = { git = "https://github.com/YdrMaster/gguf", rev = "c676bcc" }
+ggus = { git = "https://github.com/YdrMaster/gguf", rev = "981285c" }
 ndarray-layout = { git = "https://github.com/YdrMaster/ndarray-layout", rev = "68ab1db" }
 operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "93d84ae", default-features = false }
 

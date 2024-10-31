@@ -12,6 +12,7 @@ pub use tensor::{RandomSample, Tensor};
 pub mod ext {
     pub use gguf::{
         ext::{utok, Mmap},
+        ggml_quants,
         ggml_quants::{
             digit_layout::{types as primitive, DigitLayout},
             f16, types as quant,
@@ -57,13 +58,13 @@ impl LlamaMeta {
 
     pub fn kv_cache(&self, buf: usize) -> Tensor<usize> {
         let &Self {
-            dt_mat,
+            dt_embd,
             nblk,
             nkvh,
             dh,
             ..
         } = self;
-        Tensor::new(dt_mat, &[buf, nblk, 2, nkvh, dh])
+        Tensor::new(dt_embd, &[buf, nblk, 2, nkvh, dh])
     }
 
     pub fn embd(&self, nt: usize) -> Tensor<usize> {

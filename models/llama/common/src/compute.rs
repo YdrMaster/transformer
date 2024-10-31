@@ -1,4 +1,4 @@
-﻿use super::{args::Args, LlamaMeta};
+use super::{args::Args, LlamaMeta};
 use gguf::ggml_quants::digit_layout::{types as ty, DigitLayout};
 use itertools::izip;
 use operators::{
@@ -44,6 +44,7 @@ pub trait Operators {
     }
 }
 
+#[derive(PartialEq, Clone, Copy)]
 pub enum BlkWeight {
     AttnNorm,
     AttnQKV,
@@ -154,7 +155,7 @@ where
             max_att_len,
         } = args;
         let LlamaMeta {
-            dt_mat,
+            dt_embd,
             nblk,
             nh,
             nkvh,
@@ -167,11 +168,11 @@ where
         let mut workspace = Workspace::new(queue_alloc, workspace, workspace_size);
 
         let mut x = embd;
-        let x1 = Tensor::new(dt_mat, x.shape());
+        let x1 = Tensor::new(dt_embd, x.shape());
         let (buf, workspace) = workspace.split_at_mut(*x1.get());
         let mut x1 = x1.map(|_| buf);
 
-        let qkv = Tensor::new(dt_mat, &[nt, (nh + nkvh + nkvh) * dh]);
+        let qkv = Tensor::new(dt_embd, &[nt, (nh + nkvh + nkvh) * dh]);
 
         let sin = sin_cos.clone().index(0, 0);
         let cos = sin_cos.index(0, 1);
@@ -244,6 +245,7 @@ where
                 }
 
                 let o = q.merge(1..3).unwrap();
+                drop(w);
                 let w = self.weights.attn_o(iblk, queue);
                 self.mat_mul(&mut x, beta, &o, &w, 1., workspace, queue_alloc)?;
 
