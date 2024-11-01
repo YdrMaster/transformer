@@ -24,13 +24,6 @@ pub struct Tensor<T> {
 
 impl Tensor<usize> {
     pub fn new(dt: DigitLayout, shape: &[usize]) -> Self {
-        assert!(shape.len() <= 5);
-
-        let mut buf = [0; 5];
-        buf[..shape.len()].copy_from_slice(shape);
-        buf[shape.len() - 1] /= block_size(dt);
-        let shape = &buf[..shape.len()];
-
         let ele = dt_size(dt);
         Self {
             dt,

@@ -4,6 +4,7 @@ mod storage;
 
 use gguf::ggml_quants::digit_layout::DigitLayout;
 use std::ops::{Range, RangeBounds};
+use tensor::block_size;
 
 pub use args::{Args as LlamaArgs, Request as LlamaRequest};
 pub use common::Contiguous;
@@ -123,15 +124,14 @@ impl LlamaMeta {
     }
 
     fn mat(&self, row: usize, col: usize, usage: TensorUsage) -> Tensor<usize> {
-        Tensor::new(
-            // NOTICE: 权重矩阵以 mat 类型存储但以 embd 类型参与计算
-            match usage {
-                TensorUsage::Storage => self.dt_mat,
-                TensorUsage::Computation => self.dt_embd,
-            },
-            &[row, col],
-        )
-        .transpose(&[1, 0])
+        // NOTICE: 权重矩阵以 mat 类型存储但以 embd 类型参与计算
+        match usage {
+            TensorUsage::Storage => Tensor::new(self.dt_mat, &[row, col / block_size(self.dt_mat)]),
+            TensorUsage::Computation => {
+                assert_eq!(block_size(self.dt_embd), 1);
+                Tensor::new(self.dt_embd, &[row, col]).transpose(&[1, 0])
+            }
+        }
     }
 }
 

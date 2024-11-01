@@ -1,8 +1,8 @@
 ﻿use crate::{normalize, LlamaMeta};
 use common::{borrow, own, Contiguous};
-use gguf::{ggml_quants::digit_layout::DigitLayout, GGufMetaMapExt, GGufModel};
+use gguf::{GGufMetaMapExt, GGufModel};
 use std::ops::{DerefMut, RangeBounds};
-use tensor::{block_size, rearrange, split, Tensor};
+use tensor::{rearrange, split, Tensor};
 
 #[derive(Clone)]
 pub struct Storage<T> {
@@ -121,44 +121,38 @@ impl<'w> BlkStorage<&'w [u8]> {
         assert!(0 < len && range.end <= count);
 
         let &LlamaMeta {
-            dt_mat,
-            nh,
-            nkvh,
-            d,
-            dh,
-            di,
-            ..
+            nh, nkvh, dh, di, ..
         } = meta;
         assert_eq!(nkvh % count, 0);
         assert_eq!(di % count, 0);
 
-        fn tensor<'t>(dt: DigitLayout, shape: &[usize], data: &'t [u8]) -> Tensor<&'t [u8]> {
-            Tensor::new(dt, shape).map(|size| {
-                debug_assert_eq!(size, data.len());
-                data
-            })
-        }
+        let mut dis = meta.clone();
+        dis.distribute(range.clone(), count);
 
+        use crate::TensorUsage::Storage as TensorMem;
         BlkStorage {
             attn_norm: borrow(self.attn_norm),
             attn_qkv: if len == count {
                 borrow(self.attn_qkv)
             } else {
-                let qkv = tensor(dt_mat, &[nh + nkvh + nkvh, dh, d], self.attn_qkv);
-                split!(qkv => q, k, v; [nh, nkvh, nkvh] @ 0);
+                let dq = nh * dh;
+                let dkv = nkvh * dh;
 
-                let nh = nh / count;
-                let nkvh = nkvh / count;
+                let qkv = meta.attn_qkv(TensorMem).map(|_| self.attn_qkv);
+                split!(qkv => q, k, v; [dq, dkv, dkv] @ 0);
 
-                let q = q.slice(0, nh * start, 1, nh * len);
-                let k = k.slice(0, nkvh * start, 1, nkvh * len);
-                let v = v.slice(0, nkvh * start, 1, nkvh * len);
+                let dq = dq / count;
+                let dkv = dkv / count;
+
+                let q = q.slice(0, dq * start, 1, dq * len);
+                let k = k.slice(0, dkv * start, 1, dkv * len);
+                let v = v.slice(0, dkv * start, 1, dkv * len);
                 debug_assert!(q.is_contiguous() && k.is_contiguous() && v.is_contiguous());
 
-                let mut ans = Tensor::new(dt_mat, &[(nh + nkvh + nkvh) * len, dh, d]).map(&mut f);
+                let mut ans = dis.attn_qkv(TensorMem).map(&mut f);
                 {
                     let ans = ans.map_slice_mut();
-                    split!(ans => q_, k_, v_; [nh * len , nkvh * len, nkvh * len] @ 0);
+                    split!(ans => q_, k_, v_; [dq * len , dkv * len, dkv * len] @ 0);
                     let mut q_ = q_;
                     let mut k_ = k_;
                     let mut v_ = v_;
@@ -171,11 +165,12 @@ impl<'w> BlkStorage<&'w [u8]> {
             attn_o: if len == count {
                 borrow(self.attn_o)
             } else {
-                let o = tensor(dt_mat, &[d, nh, dh], self.attn_o);
-                let nh = nh / count;
-                let o = o.slice(1, nh * start, 1, nh * len);
+                let o = meta.attn_o(TensorMem).map(|_| self.attn_o);
 
-                let mut o_ = Tensor::new(o.dt(), &[d, nh, dh]).map(&mut f);
+                let d = o.shape()[1] / count;
+                let o = o.slice(1, d * start, 1, d * len);
+
+                let mut o_ = Tensor::new(o.dt(), o.shape()).map(&mut f);
                 rearrange(&mut o_, &o);
                 own(o_.take())
             },
@@ -183,7 +178,7 @@ impl<'w> BlkStorage<&'w [u8]> {
             ffn_gate_up: if len == count {
                 borrow(self.ffn_gate_up)
             } else {
-                let gu = tensor(dt_mat, &[di + di, d], self.ffn_gate_up);
+                let gu = meta.ffn_gate_up(TensorMem).map(|_| self.ffn_gate_up);
                 split!(gu => g, u; [di, di] @ 0);
 
                 let di = di / count;
@@ -192,7 +187,7 @@ impl<'w> BlkStorage<&'w [u8]> {
                 let u = u.slice(0, di * start, 1, di * len);
                 debug_assert!(g.is_contiguous() && u.is_contiguous());
 
-                let mut ans = Tensor::new(dt_mat, &[(di + di) * len, d]).map(&mut f);
+                let mut ans = dis.ffn_gate_up(TensorMem).map(&mut f);
                 {
                     let ans = ans.map_slice_mut();
                     split!(ans => g_, u_; [di * len , di * len] @ 0);
@@ -206,11 +201,12 @@ impl<'w> BlkStorage<&'w [u8]> {
             ffn_down: if len == count {
                 borrow(self.ffn_down)
             } else {
-                let down = tensor(dt_mat, &[d, di], self.ffn_down);
-                let p = di / count / block_size(dt_mat);
-                let down = down.slice(1, p * start, 1, p * len);
+                let down = meta.ffn_down(TensorMem).map(|_| self.ffn_down);
 
-                let mut down_ = Tensor::new(down.dt(), &[d, di / count]).map(&mut f);
+                let d = down.shape()[1] / count;
+                let down = down.slice(1, d * start, 1, d * len);
+
+                let mut down_ = Tensor::new(down.dt(), down.shape()).map(&mut f);
                 rearrange(&mut down_, &down);
                 own(down_.take())
             },
