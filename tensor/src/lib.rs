@@ -52,7 +52,7 @@ impl<T> Tensor<T> {
 
     #[inline]
     pub fn offset(&self) -> usize {
-        self.layout.offset()
+        self.layout.offset() as _
     }
 
     #[inline]
@@ -119,7 +119,7 @@ impl<T> Tensor<T> {
         strides.push(1);
         Self {
             dt: digit_layout::types::U8,
-            layout: ArrayLayout::new(&shape, &strides, self.offset()),
+            layout: ArrayLayout::new(&shape, &strides, self.offset() as _),
             physical: self.physical,
         }
     }
@@ -145,7 +145,7 @@ where
 
     #[inline]
     pub fn base(&self) -> *const B {
-        unsafe { self.physical.as_ptr().byte_add(self.layout.offset()) }
+        unsafe { self.physical.as_ptr().byte_add(self.layout.offset() as _) }
     }
 }
 
@@ -169,7 +169,11 @@ where
 
     #[inline]
     pub fn base_mut(&mut self) -> *mut B {
-        unsafe { self.physical.as_mut_ptr().byte_add(self.layout.offset()) }
+        unsafe {
+            self.physical
+                .as_mut_ptr()
+                .byte_add(self.layout.offset() as _)
+        }
     }
 }
 
