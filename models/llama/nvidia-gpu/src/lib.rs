@@ -48,7 +48,7 @@ where
     type Rearrange = op!(rearrange);
     type AllReduce = R;
 
-    fn debug<T>(tensor: &Tensor<T>)
+    fn debug<T>(tensor: &Tensor<T>, _queue: &QueueOf<Self::Hardware>)
     where
         T: Deref<Target = [ByteOf<Self::Hardware>]>,
     {

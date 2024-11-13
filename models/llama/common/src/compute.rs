@@ -25,7 +25,7 @@ pub trait Operators {
     type Rearrange: Rearrange<Self::Hardware>;
     type AllReduce: AllReduce<Self::Hardware, Self::TopoNode>;
 
-    fn debug<T>(tensor: &Tensor<T>)
+    fn debug<T>(tensor: &Tensor<T>, queue: &QueueOf<Self::Hardware>)
     where
         T: Deref<Target = [ByteOf<Self::Hardware>]>;
 
