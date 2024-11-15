@@ -67,7 +67,7 @@ fn test_infer() {
             let stream = ctx.stream();
 
             let token_embd = stream.from_host(model.token_embd);
-            let weights = Weights::new(&model, .., 1, usize::MAX, &stream);
+            let weights = Weights::new(&model, .., 1, model.meta.nblk / 2, ctx.stream());
             let mut worker = Worker::new(&gpu, meta.clone(), weights, true);
             let mut cache = meta.kv_cache(nctx).map(|size| stream.malloc::<u8>(size));
             let sin_cos =
