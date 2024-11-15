@@ -9,7 +9,7 @@ use operators::{
     random_sample::{KVPair, SampleArgs},
 };
 use std::{slice::from_raw_parts_mut, thread, usize};
-use test_utils::{Inference, TokenizerAndPrompt};
+use test_utils::{load_roll_cache_size, Inference, TokenizerAndPrompt};
 
 type Worker<'w> = LlamaWorker<Operators, Weights<'w>>;
 
@@ -27,6 +27,9 @@ fn test_infer() {
     else {
         return;
     };
+
+    let roll_cache_size = load_roll_cache_size();
+    println!("roll_cache_size: {}", roll_cache_size);
     let gguf = GGufModel::read(model.iter().map(|s| &**s));
 
     let TokenizerAndPrompt {
@@ -67,7 +70,7 @@ fn test_infer() {
             let stream = ctx.stream();
 
             let token_embd = stream.from_host(model.token_embd);
-            let weights = Weights::new(&model, .., 1, model.meta.nblk / 2, ctx.stream());
+            let weights = Weights::new(&model, .., 1, roll_cache_size, ctx);
             let mut worker = Worker::new(&gpu, meta.clone(), weights, true);
             let mut cache = meta.kv_cache(nctx).map(|size| stream.malloc::<u8>(size));
             let sin_cos =
