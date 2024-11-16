@@ -272,7 +272,7 @@ impl<'ctx> H2DLoader<'ctx> {
 
 impl<'ctx> WeightLoader for Weights<'ctx> {
     type Hardware = Gpu;
-    type Memory<'s>
+    type Weight<'s>
         = WeightResult<'s, 'ctx>
     where
         Self: 's;
@@ -283,7 +283,7 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
         which: BlkWeight,
         iblk: usize,
         queue: &QueueOf<Self::Hardware>,
-    ) -> Self::Memory<'_> {
+    ) -> Self::Weight<'_> {
         assert!(iblk < self.nblk);
         if self.pool_size < self.nblk {
             macro_rules! cases {
@@ -323,12 +323,12 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
     }
 
     #[inline]
-    fn output_norm(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_> {
+    fn output_norm(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Weight<'_> {
         WeightResult::Borrowed(&self.output_norm)
     }
 
     #[inline]
-    fn output(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_> {
+    fn output(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Weight<'_> {
         WeightResult::Borrowed(&self.output)
     }
 }

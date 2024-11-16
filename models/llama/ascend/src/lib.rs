@@ -136,7 +136,7 @@ impl<'ctx> H2DLoader<'ctx> {
 
 impl WeightLoader for Weights<'_> {
     type Hardware = Npu;
-    type Memory<'s>
+    type Weight<'s>
         = &'s [DevByte]
     where
         Self: 's;
@@ -147,7 +147,7 @@ impl WeightLoader for Weights<'_> {
         which: BlkWeight,
         iblk: usize,
         _queue: &QueueOf<Self::Hardware>,
-    ) -> Self::Memory<'_> {
+    ) -> Self::Weight<'_> {
         let blk = &self.blks[iblk];
         match which {
             BlkWeight::AttnNorm => &blk.attn_norm,
@@ -160,12 +160,12 @@ impl WeightLoader for Weights<'_> {
     }
 
     #[inline]
-    fn output_norm(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_> {
+    fn output_norm(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Weight<'_> {
         &self.output_norm
     }
 
     #[inline]
-    fn output(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_> {
+    fn output(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Weight<'_> {
         &self.output
     }
 }

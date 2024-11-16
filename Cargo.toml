@@ -19,11 +19,11 @@ tensor.path = "tensor"
 causal-lm.path = "causal-lm"
 test-utils.path = "test-utils"
 
-ggus = { git = "https://github.com/YdrMaster/gguf", rev = "0fe682f" }
+ggus = { git = "https://github.com/YdrMaster/gguf", rev = "b0f571f" }
 ndarray-layout = { git = "https://github.com/YdrMaster/ndarray-layout", rev = "48d36c5" }
 operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "1a713ff", default-features = false }
 
 build-script-cfg = "0.0"
-search-cl-tools = { git = "https://github.com/InfiniTensor/clrt", rev = "166aba1" }
-search-cuda-tools = { git = "https://github.com/YdrMaster/cuda-driver", rev = "5a8d0c8" }
-search-ascend-tools = { git = "https://github.com/InfiniTensor/ascendcl", rev = "7b2c35d" }
+search-cl-tools = { git = "https://github.com/InfiniTensor/clrt", rev = "0457a57" }
+search-cuda-tools = { git = "https://github.com/YdrMaster/cuda-driver", rev = "e2ec203" }
+search-ascend-tools = { git = "https://github.com/InfiniTensor/ascendcl", rev = "bca7489" }

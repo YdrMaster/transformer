@@ -188,7 +188,7 @@ fn dequant(dt_src: DigitLayout, dt_tgt: DigitLayout, src: &[u8], tgt: &mut [u8])
 
 impl WeightLoader for Weights<'_> {
     type Hardware = Cpu;
-    type Memory<'s>
+    type Weight<'s>
         = Dequant<'s>
     where
         Self: 's;
@@ -199,7 +199,7 @@ impl WeightLoader for Weights<'_> {
         which: BlkWeight,
         iblk: usize,
         _queue: &QueueOf<Self::Hardware>,
-    ) -> Self::Memory<'_> {
+    ) -> Self::Weight<'_> {
         let &Self {
             ref blks,
             ref weight_cache,
@@ -275,12 +275,12 @@ impl WeightLoader for Weights<'_> {
     }
 
     #[inline]
-    fn output_norm(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_> {
+    fn output_norm(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Weight<'_> {
         Dequant::Borrowed(self.output_norm)
     }
 
     #[inline]
-    fn output(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_> {
+    fn output(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Weight<'_> {
         Dequant::Borrowed(self.output)
     }
 }

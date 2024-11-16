@@ -97,7 +97,7 @@ impl<'blk> Weights {
 
 impl WeightLoader for Weights {
     type Hardware = ClDevice;
-    type Memory<'s>
+    type Weight<'s>
         = &'s [SvmByte]
     where
         Self: 's;
@@ -108,7 +108,7 @@ impl WeightLoader for Weights {
         which: BlkWeight,
         iblk: usize,
         _queue: &QueueOf<Self::Hardware>,
-    ) -> Self::Memory<'_> {
+    ) -> Self::Weight<'_> {
         let blk = &self.0.blocks[iblk];
         match which {
             BlkWeight::AttnNorm => &blk.attn_norm,
@@ -121,12 +121,12 @@ impl WeightLoader for Weights {
     }
 
     #[inline]
-    fn output_norm(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_> {
+    fn output_norm(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Weight<'_> {
         &self.0.output_norm
     }
 
     #[inline]
-    fn output(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_> {
+    fn output(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Weight<'_> {
         &self.0.output
     }
 }
