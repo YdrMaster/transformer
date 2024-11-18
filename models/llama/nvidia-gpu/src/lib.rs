@@ -3,7 +3,7 @@
 use llama::{BlkWeight, Contiguous, LlamaBlkStorage, LlamaStorage, Tensor, WeightLoader};
 use operators::{
     all_reduce::{AllReduce, NonAllReduce},
-    cuda::{memcpy_d2h, DevByte, DevMem, Event, HostMem, Stream},
+    cuda::{memcpy_d2h, CurrentCtx, DevByte, DevMem, Event, HostMem, Stream},
     nvidia_gpu::Gpu,
     random_sample::nvidia_gpu::Operator as RandomSampleGpu,
     rearrange::nvidia_gpu::Operator as Rearrange,
@@ -21,28 +21,33 @@ pub struct Operators<N = Gpu, R = NonAllReduce<Gpu, Rearrange>>(PhantomData<(N, 
 pub type RandomSample = llama::RandomSample<Gpu, RandomSampleGpu>;
 
 pub struct Weights<'ctx> {
-    blks: Box<[LlamaBlkStorage<DevMem<'ctx>>]>,
-    blks_roll_caches: LlamaBlkStorage<RefCell<RollCache<'ctx>>>,
-    #[allow(dead_code)]
-    blk_source: Box<[LlamaBlkStorage<HostMem<'ctx>>]>,
+    blks: LlamaBlkStorage<Cache<'ctx>>,
     output_norm: DevMem<'ctx>,
     output: DevMem<'ctx>,
-    pool_size: usize,
-    nblk: usize,
-    stream: Stream<'ctx>,
+}
+
+pub enum Cache<'ctx> {
+    Static(Box<[DevMem<'ctx>]>),
+    Rolling {
+        stream: Stream<'ctx>,
+        host: Box<[HostMem<'ctx>]>,
+        dev: RefCell<RollCache<'ctx>>,
+    },
 }
 
 pub struct RollCache<'ctx> {
     blk_idx: usize,
     start_idx: usize,
+    nblk: usize,
     cache: Box<[(DevMem<'ctx>, Event<'ctx>)]>,
 }
 
 impl<'ctx> RollCache<'ctx> {
-    pub fn new(cache: Box<[(DevMem<'ctx>, Event<'ctx>)]>) -> Self {
+    pub fn new(nblk: usize, cache: Box<[(DevMem<'ctx>, Event<'ctx>)]>) -> Self {
         Self {
             blk_idx: 0,
             start_idx: 0,
+            nblk,
             cache,
         }
     }
@@ -54,13 +59,12 @@ impl<'ctx> RollCache<'ctx> {
 }
 
 pub enum WeightResult<'s, 'ctx> {
-    // (roll_cache,nblk,stream,blk_source)
-    RollCached(
-        RefMut<'s, RollCache<'ctx>>,
-        usize,
-        &'s Stream<'ctx>,
-        &'s HostMem<'ctx>,
-    ),
+    RollCached {
+        roll_cache: RefMut<'s, RollCache<'ctx>>,
+        load_stream: &'s Stream<'ctx>,
+        host: &'s [HostMem<'ctx>],
+        compute_stream: &'s Stream<'s>,
+    },
     Borrowed(&'s [DevByte]),
 }
 
@@ -69,7 +73,7 @@ impl Deref for WeightResult<'_, '_> {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            WeightResult::RollCached(roll_cache, _, _, _) => {
+            WeightResult::RollCached { roll_cache, .. } => {
                 let (dev_mem, _event) = &roll_cache.cache[roll_cache.start_idx];
 
                 dev_mem
@@ -82,14 +86,25 @@ impl Deref for WeightResult<'_, '_> {
 impl Drop for WeightResult<'_, '_> {
     fn drop(&mut self) {
         match self {
-            WeightResult::RollCached(roll_cache, nblk, stream, blk_source) => {
-                roll_cache.blk_idx = (roll_cache.blk_idx + 1) % *nblk;
+            WeightResult::RollCached {
+                roll_cache,
+                load_stream,
+                host,
+                compute_stream,
+            } => {
+                // wait for the compute to finish
+                load_stream.wait_for(&compute_stream.record());
+
+                let next_load_idx = (roll_cache.blk_idx + roll_cache.cache.len()) % roll_cache.nblk;
+                let host = &host[next_load_idx];
+
+                roll_cache.blk_idx = (roll_cache.blk_idx + 1) % roll_cache.nblk;
 
                 let start_idx = roll_cache.start_idx;
                 let (dev_mem, event) = &mut roll_cache.cache[start_idx];
-                assert!(dev_mem.len() == blk_source.len());
-                stream.memcpy_h2d(dev_mem, blk_source);
-                *event = stream.record();
+                assert!(dev_mem.len() == host.len());
+                load_stream.memcpy_h2d(dev_mem, host);
+                *event = load_stream.record();
 
                 roll_cache.start_idx = (roll_cache.start_idx + 1) % roll_cache.cache.len();
             }
@@ -138,107 +153,94 @@ impl<'blk> Weights<'blk> {
         range: impl RangeBounds<usize> + Clone,
         count: usize,
         pool_size: usize,
-        stream: Stream<'blk>,
+        ctx: &'blk CurrentCtx,
     ) -> Self {
         assert!(pool_size > 0);
-        if pool_size < model.meta.nblk {
-            let mut blks_roll_caches = model.blocks[0]
+        let base_stream = ctx.stream();
+        let blks = if pool_size < model.meta.nblk {
+            let mut blks_host = model.blocks[0]
                 .as_ref()
-                .map(|_| Vec::with_capacity(pool_size));
-            let blk_source = model
-                .blocks
-                .iter()
-                .enumerate()
-                .map(|(i, blk)| {
-                    let blk = blk
-                        .distribute(&model.meta, range.clone(), count, |len| {
-                            stream.ctx().malloc_host::<u8>(len)
-                        })
-                        .map(|host| match host {
-                            Contiguous::Borrowed(host) => {
-                                let mut ans = stream.ctx().malloc_host::<u8>(host.len());
-                                assert!(ans.len() == host.len());
-                                ans.copy_from_slice(host);
-                                ans
-                            }
-                            Contiguous::Owned(host) => host,
-                        });
-                    macro_rules! load {
-                        ($( $ident:ident )+ ) => {
-                                $( {blks_roll_caches.$ident.push(
-                                            (stream.from_host(&blk.$ident),stream.record())
-                                        );
-                                    }
-                                )+
-
-                        };
-                    }
-                    if i < pool_size {
-                        load! {
-                            attn_norm
-                            attn_qkv
-                            attn_o
-                            ffn_norm
-                            ffn_gate_up
-                            ffn_down
+                .map(|_| Vec::with_capacity(model.meta.nblk));
+            model.blocks.iter().for_each(|blk| {
+                let blk = blk
+                    .distribute(&model.meta, range.clone(), count, |len| {
+                        base_stream.ctx().malloc_host::<u8>(len)
+                    })
+                    .map(|host| match host {
+                        Contiguous::Borrowed(host) => {
+                            let mut ans = base_stream.ctx().malloc_host::<u8>(host.len());
+                            assert!(ans.len() == host.len());
+                            ans.copy_from_slice(host);
+                            ans
                         }
-                    }
-                    blk
-                })
-                .collect::<Box<[_]>>();
-            let blks_roll_caches =
-                blks_roll_caches.map(|vec| RefCell::new(RollCache::new(vec.into())));
-
-            Self {
-                blks: Box::new([]),
-                blks_roll_caches,
-                blk_source,
-                output_norm: stream.from_host(model.output_norm),
-                output: stream.from_host(model.output),
-                pool_size,
-                nblk: model.meta.nblk,
-                stream,
-            }
+                        Contiguous::Owned(host) => host,
+                    });
+                let LlamaBlkStorage {
+                    attn_norm,
+                    attn_qkv,
+                    attn_o,
+                    ffn_norm,
+                    ffn_gate_up,
+                    ffn_down,
+                } = blk;
+                blks_host.attn_norm.push(attn_norm);
+                blks_host.attn_qkv.push(attn_qkv);
+                blks_host.attn_o.push(attn_o);
+                blks_host.ffn_norm.push(ffn_norm);
+                blks_host.ffn_gate_up.push(ffn_gate_up);
+                blks_host.ffn_down.push(ffn_down);
+            });
+            blks_host.map(|vec| {
+                let stream = ctx.stream();
+                let roll_cache = vec
+                    .iter()
+                    .take(pool_size)
+                    .map(|host| (stream.from_host(host), stream.record()))
+                    .collect::<Box<_>>();
+                Cache::Rolling {
+                    stream,
+                    host: vec.into_boxed_slice(),
+                    dev: RefCell::new(RollCache::new(model.meta.nblk, roll_cache)),
+                }
+            })
         } else {
             let mut loader = None;
-            Self {
-                blks: model
-                    .blocks
-                    .iter()
-                    .map(|blk| {
-                        let blk = blk.distribute(&model.meta, range.clone(), count, |len| {
-                            stream.ctx().malloc_host::<u8>(len)
-                        });
-                        let loader = loader.get_or_insert_with(|| {
-                            blk.as_ref().map(|s| H2DLoader::new(s.len(), &stream))
-                        });
-                        macro_rules! load {
-                            ($( $ident:ident )+ ) => {
-                                LlamaBlkStorage{
-                                    $( $ident: loader.$ident.load(blk.$ident, &stream) ),+
-                                }
-                            };
-                        }
-                        load! {
-                            attn_norm
-                            attn_qkv
-                            attn_o
-                            ffn_norm
-                            ffn_gate_up
-                            ffn_down
-                        }
-                    })
-                    .collect(),
-                blks_roll_caches: model.blocks[0]
-                    .as_ref()
-                    .map(|_| RefCell::new(RollCache::new(Box::new([])))),
-                blk_source: Box::new([]),
-                output_norm: stream.from_host(model.output_norm),
-                output: stream.from_host(model.output),
-                pool_size,
-                nblk: model.meta.nblk,
-                stream,
-            }
+            let mut blks_dev = model.blocks[0]
+                .as_ref()
+                .map(|_| Vec::with_capacity(model.meta.nblk));
+            model.blocks.iter().for_each(|blk| {
+                let blk = blk.distribute(&model.meta, range.clone(), count, |len| {
+                    base_stream.ctx().malloc_host::<u8>(len)
+                });
+                let loader = loader.get_or_insert_with(|| {
+                    blk.as_ref().map(|s| H2DLoader::new(s.len(), &base_stream))
+                });
+
+                macro_rules! load {
+                    ($( $ident:ident )+ ) => {
+                        $({  blks_dev.$ident.push(loader.$ident.load(blk.$ident, &base_stream)); })+
+                    };
+                }
+                load! {
+                    attn_norm
+                    attn_qkv
+                    attn_o
+                    ffn_norm
+                    ffn_gate_up
+                    ffn_down
+                }
+            });
+            blks_dev.map(|vec| Cache::Static(vec.into_boxed_slice()))
+        };
+
+        let output_norm = base_stream.from_host(model.output_norm);
+        let output = base_stream.from_host(model.output);
+
+        base_stream.synchronize();
+        Self {
+            blks,
+            output_norm,
+            output,
         }
     }
 }
@@ -278,47 +280,34 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
         Self: 's;
 
     #[inline]
-    fn load_blk(
-        &self,
+    fn load_blk<'s>(
+        &'s self,
         which: BlkWeight,
         iblk: usize,
-        queue: &QueueOf<Self::Hardware>,
-    ) -> Self::Weight<'_> {
-        assert!(iblk < self.nblk);
-        if self.pool_size < self.nblk {
-            macro_rules! cases {
-                ($( $ty:ident,$ident:ident )+ ) => {
-                    match which {
-                        $(BlkWeight::$ty => {
-                            let roll_cache = self.blks_roll_caches.$ident.borrow_mut();
-                            queue.wait_for(roll_cache.first_event());
-                            assert!(iblk == roll_cache.blk_idx);
-                            let next_load_idx = (iblk + self.pool_size) % self.nblk;
-                            let blk = &self.blk_source[next_load_idx].$ident;
-                            WeightResult::RollCached(roll_cache, self.nblk, &self.stream, blk)
-                        })+
-                    }
+        queue: &'s QueueOf<Self::Hardware>,
+    ) -> Self::Weight<'s> {
+        let cache = match which {
+            BlkWeight::AttnNorm => &self.blks.attn_norm,
+            BlkWeight::AttnQKV => &self.blks.attn_qkv,
+            BlkWeight::AttnO => &self.blks.attn_o,
+            BlkWeight::FfnNorm => &self.blks.ffn_norm,
+            BlkWeight::FfnGateUp => &self.blks.ffn_gate_up,
+            BlkWeight::FfnDown => &self.blks.ffn_down,
+        };
+
+        match cache {
+            Cache::Static(dev) => WeightResult::Borrowed(&dev[iblk]),
+            Cache::Rolling { stream, host, dev } => {
+                let roll_cache = dev.borrow_mut();
+                queue.wait_for(roll_cache.first_event());
+                assert!(iblk == roll_cache.blk_idx);
+                WeightResult::RollCached {
+                    roll_cache,
+                    load_stream: stream,
+                    host,
+                    compute_stream: queue,
                 }
             }
-
-            cases!(
-                AttnNorm,attn_norm
-                AttnQKV,attn_qkv
-                AttnO,attn_o
-                FfnNorm,ffn_norm
-                FfnGateUp,ffn_gate_up
-                FfnDown,ffn_down
-            )
-        } else {
-            let blk = &self.blks[iblk];
-            WeightResult::Borrowed(match which {
-                BlkWeight::AttnNorm => &blk.attn_norm,
-                BlkWeight::AttnQKV => &blk.attn_qkv,
-                BlkWeight::AttnO => &blk.attn_o,
-                BlkWeight::FfnNorm => &blk.ffn_norm,
-                BlkWeight::FfnGateUp => &blk.ffn_gate_up,
-                BlkWeight::FfnDown => &blk.ffn_down,
-            })
         }
     }
 

@@ -52,6 +52,13 @@ impl Inference {
     }
 }
 
+pub fn load_roll_cache_size() -> usize {
+    var("ROLL_CACHE_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(usize::MAX)
+}
+
 pub struct TokenizerAndPrompt {
     pub eos: utok,
     pub tokenizer: Tokenizer,
