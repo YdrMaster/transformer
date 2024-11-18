@@ -14,6 +14,7 @@ use std::{
     marker::PhantomData,
     mem::replace,
     ops::{Deref, RangeBounds},
+    rc::Rc,
 };
 
 pub struct Operators<N = Gpu, R = NonAllReduce<Gpu, Rearrange>>(PhantomData<(N, R)>);
@@ -29,15 +30,15 @@ pub struct Weights<'ctx> {
 pub enum Cache<'ctx> {
     Static(Box<[DevMem<'ctx>]>),
     Rolling {
-        stream: Stream<'ctx>,
+        stream: Rc<Stream<'ctx>>,
         host: Box<[HostMem<'ctx>]>,
         dev: RefCell<RollCache<'ctx>>,
     },
 }
 
 pub struct RollCache<'ctx> {
-    blk_idx: usize,
-    start_idx: usize,
+    global_idx: usize,
+    local_idx: usize,
     nblk: usize,
     cache: Box<[(DevMem<'ctx>, Event<'ctx>)]>,
 }
@@ -45,15 +46,15 @@ pub struct RollCache<'ctx> {
 impl<'ctx> RollCache<'ctx> {
     pub fn new(nblk: usize, cache: Box<[(DevMem<'ctx>, Event<'ctx>)]>) -> Self {
         Self {
-            blk_idx: 0,
-            start_idx: 0,
+            global_idx: 0,
+            local_idx: 0,
             nblk,
             cache,
         }
     }
 
     pub fn first_event(&self) -> &Event<'ctx> {
-        let (_, ref event) = self.cache[self.start_idx];
+        let (_, ref event) = self.cache[self.local_idx];
         event
     }
 }
@@ -74,9 +75,7 @@ impl Deref for WeightResult<'_, '_> {
     fn deref(&self) -> &Self::Target {
         match self {
             WeightResult::RollCached { roll_cache, .. } => {
-                let (dev_mem, _event) = &roll_cache.cache[roll_cache.start_idx];
-
-                dev_mem
+                &roll_cache.cache[roll_cache.local_idx].0
             }
             WeightResult::Borrowed(dev_mem) => dev_mem,
         }
@@ -95,18 +94,19 @@ impl Drop for WeightResult<'_, '_> {
                 // wait for the compute to finish
                 load_stream.wait_for(&compute_stream.record());
 
-                let next_load_idx = (roll_cache.blk_idx + roll_cache.cache.len()) % roll_cache.nblk;
+                let next_load_idx =
+                    (roll_cache.global_idx + roll_cache.cache.len()) % roll_cache.nblk;
                 let host = &host[next_load_idx];
 
-                roll_cache.blk_idx = (roll_cache.blk_idx + 1) % roll_cache.nblk;
+                roll_cache.global_idx = (roll_cache.global_idx + 1) % roll_cache.nblk;
 
-                let start_idx = roll_cache.start_idx;
+                let start_idx = roll_cache.local_idx;
                 let (dev_mem, event) = &mut roll_cache.cache[start_idx];
                 assert!(dev_mem.len() == host.len());
                 load_stream.memcpy_h2d(dev_mem, host);
                 *event = load_stream.record();
 
-                roll_cache.start_idx = (roll_cache.start_idx + 1) % roll_cache.cache.len();
+                roll_cache.local_idx = (roll_cache.local_idx + 1) % roll_cache.cache.len();
             }
             WeightResult::Borrowed(_) => {}
         }
@@ -156,49 +156,47 @@ impl<'blk> Weights<'blk> {
         ctx: &'blk CurrentCtx,
     ) -> Self {
         assert!(pool_size > 0);
-        let base_stream = ctx.stream();
+        let stream = Rc::new(ctx.stream());
         let blks = if pool_size < model.meta.nblk {
             let mut blks_host = model.blocks[0]
                 .as_ref()
                 .map(|_| Vec::with_capacity(model.meta.nblk));
-            model.blocks.iter().for_each(|blk| {
+            for blk in model.blocks.iter() {
                 let blk = blk
                     .distribute(&model.meta, range.clone(), count, |len| {
-                        base_stream.ctx().malloc_host::<u8>(len)
+                        ctx.malloc_host::<u8>(len)
                     })
                     .map(|host| match host {
                         Contiguous::Borrowed(host) => {
-                            let mut ans = base_stream.ctx().malloc_host::<u8>(host.len());
-                            assert!(ans.len() == host.len());
+                            let mut ans = ctx.malloc_host::<u8>(host.len());
                             ans.copy_from_slice(host);
                             ans
                         }
                         Contiguous::Owned(host) => host,
                     });
-                let LlamaBlkStorage {
-                    attn_norm,
-                    attn_qkv,
-                    attn_o,
-                    ffn_norm,
-                    ffn_gate_up,
-                    ffn_down,
-                } = blk;
-                blks_host.attn_norm.push(attn_norm);
-                blks_host.attn_qkv.push(attn_qkv);
-                blks_host.attn_o.push(attn_o);
-                blks_host.ffn_norm.push(ffn_norm);
-                blks_host.ffn_gate_up.push(ffn_gate_up);
-                blks_host.ffn_down.push(ffn_down);
-            });
+
+                macro_rules! push {
+                    ($( $ident:ident )+ ) => {
+                        $({ blks_host.$ident.push(blk.$ident); })+
+                    };
+                }
+                push! {
+                    attn_norm
+                    attn_qkv
+                    attn_o
+                    ffn_norm
+                    ffn_gate_up
+                    ffn_down
+                }
+            }
             blks_host.map(|vec| {
-                let stream = ctx.stream();
                 let roll_cache = vec
                     .iter()
                     .take(pool_size)
                     .map(|host| (stream.from_host(host), stream.record()))
                     .collect::<Box<_>>();
                 Cache::Rolling {
-                    stream,
+                    stream: stream.clone(),
                     host: vec.into_boxed_slice(),
                     dev: RefCell::new(RollCache::new(model.meta.nblk, roll_cache)),
                 }
@@ -208,17 +206,16 @@ impl<'blk> Weights<'blk> {
             let mut blks_dev = model.blocks[0]
                 .as_ref()
                 .map(|_| Vec::with_capacity(model.meta.nblk));
-            model.blocks.iter().for_each(|blk| {
+            for blk in &model.blocks {
                 let blk = blk.distribute(&model.meta, range.clone(), count, |len| {
-                    base_stream.ctx().malloc_host::<u8>(len)
+                    ctx.malloc_host::<u8>(len)
                 });
-                let loader = loader.get_or_insert_with(|| {
-                    blk.as_ref().map(|s| H2DLoader::new(s.len(), &base_stream))
-                });
+                let loader = loader
+                    .get_or_insert_with(|| blk.as_ref().map(|s| H2DLoader::new(s.len(), &stream)));
 
                 macro_rules! load {
                     ($( $ident:ident )+ ) => {
-                        $({  blks_dev.$ident.push(loader.$ident.load(blk.$ident, &base_stream)); })+
+                        $({ blks_dev.$ident.push(loader.$ident.load(blk.$ident, &stream)); })+
                     };
                 }
                 load! {
@@ -229,18 +226,14 @@ impl<'blk> Weights<'blk> {
                     ffn_gate_up
                     ffn_down
                 }
-            });
+            }
             blks_dev.map(|vec| Cache::Static(vec.into_boxed_slice()))
         };
 
-        let output_norm = base_stream.from_host(model.output_norm);
-        let output = base_stream.from_host(model.output);
-
-        base_stream.synchronize();
         Self {
             blks,
-            output_norm,
-            output,
+            output_norm: stream.from_host(model.output_norm),
+            output: stream.from_host(model.output),
         }
     }
 }
@@ -300,7 +293,7 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
             Cache::Rolling { stream, host, dev } => {
                 let roll_cache = dev.borrow_mut();
                 queue.wait_for(roll_cache.first_event());
-                assert!(iblk == roll_cache.blk_idx);
+                assert!(iblk == roll_cache.global_idx);
                 WeightResult::RollCached {
                     roll_cache,
                     load_stream: stream,
