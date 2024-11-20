@@ -3,12 +3,15 @@ members = [
     "common",
     "gguf",
     "tensor",
+    "test-utils",
+
     "models/llama/common",
     "models/llama/common-cpu",
     "models/llama/opencl",
     "models/llama/nvidia-gpu",
     "models/llama/ascend",
-    "test-utils",
+
+    "models/clip/common",
 ]
 resolver = "2"
 

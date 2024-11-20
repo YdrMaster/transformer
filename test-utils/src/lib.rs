@@ -5,7 +5,7 @@ use gguf::{
 use std::{
     env::{var, var_os},
     fmt,
-    path::Path,
+    path::{Path, PathBuf},
     str::FromStr,
     time::{Duration, Instant},
     vec,
@@ -57,6 +57,10 @@ pub fn load_roll_cache_size() -> usize {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(usize::MAX)
+}
+
+pub fn image() -> Option<PathBuf> {
+    var_os("TEST_IMAGE").map(PathBuf::from)
 }
 
 pub struct TokenizerAndPrompt {

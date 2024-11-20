@@ -7,3 +7,5 @@
 /deploy
 /Cargo.lock
 *.gguf
+*.jpg
+!/docs/*.jpg
