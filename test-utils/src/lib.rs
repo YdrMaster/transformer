@@ -43,7 +43,7 @@ impl Inference {
         Some(Self {
             model: map_files(path),
             prompt: var("PROMPT").unwrap_or_else(|_| String::from("Once upon a time,")),
-            as_user: var("AS_USER").ok().map_or(false, |s| !s.is_empty()),
+            as_user: var("AS_USER").ok().is_some_and(|s| !s.is_empty()),
             temperature: parse("TEMPERATURE", 0.),
             top_p: parse("TOP_P", 1.),
             top_k: parse("TOP_K", usize::MAX),

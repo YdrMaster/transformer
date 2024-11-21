@@ -11,7 +11,7 @@ common.workspace = true
 gguf.workspace = true
 tensor.workspace = true
 operators.workspace = true
-itertools = "0.13"
+itertools.workspace = true
 
 [dev-dependencies]
 test-utils.workspace = true

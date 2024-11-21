@@ -9,6 +9,7 @@ use std::{
     slice::{from_raw_parts, from_raw_parts_mut},
 };
 
+pub use ::operators::common_cpu::Blob;
 pub use operators::RandomSample;
 pub use split::{LocalSplitable, Splitable};
 

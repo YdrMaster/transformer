@@ -1,25 +1,27 @@
 ﻿use gguf::ggml_quants::digit_layout::layout;
 use image::ImageReader;
+use itertools::izip;
 use std::{ops::Deref, path::Path};
-use tensor::{rearrange, Tensor};
+use tensor::{rearrange, Blob, Tensor};
 
 #[repr(transparent)]
 pub struct Image<T>(Tensor<T>);
 
 pub struct ImageGrid {
-    grid: Option<Tensor<Vec<u8>>>,
-    whole: Image<Vec<u8>>,
+    grid: Option<Tensor<Blob>>,
+    whole: Image<Blob>,
 }
 
-layout!(RGB u(8); 3);
+layout!(Urgb u(8)     ; 3);
+layout!(Frgb e(8)m(23); 3);
 
 impl Image<Vec<u8>> {
     /// 从文件加载
     pub fn load(path: impl AsRef<Path>) -> Self {
         let rgb8 = ImageReader::open(path).unwrap().decode().unwrap().to_rgb8();
         let (x, y) = rgb8.dimensions();
-        assert_eq!(rgb8.as_raw().len(), RGB.nbytes() * (x * y) as usize);
-        Self(Tensor::new(RGB, &[y as usize, x as usize]).map(|_| rgb8.into_raw()))
+        assert_eq!(rgb8.as_raw().len(), Urgb.nbytes() * (x * y) as usize);
+        Self(Tensor::new(Urgb, &[y as usize, x as usize]).map(|_| rgb8.into_raw()))
     }
 }
 
@@ -65,7 +67,7 @@ where
                     .tile(1, &[grid_x, patch_w])
                     .tile(0, &[grid_y, patch_h])
                     .transpose(&[2, 1]);
-                let mut ans = Tensor::new(RGB, tiled.shape()).map(|size| vec![0; size]);
+                let mut ans = Tensor::new(Urgb, tiled.shape()).map(Blob::new);
                 rearrange(&mut ans, &tiled.map_slice());
 
                 Some(ans)
@@ -80,8 +82,10 @@ where
     }
 
     /// 双三次插值缩放
-    fn bicubic_resize(&self, [w_, h_]: [usize; 2]) -> Image<Vec<u8>> {
-        let mut ans_ = Image(Tensor::new(RGB, &[h_, w_]).map(|size| vec![0; size]));
+    fn bicubic_resize(&self, [w_, h_]: [usize; 2]) -> Image<Blob> {
+        assert_eq!(self.0.dt(), Urgb);
+
+        let mut ans_ = Image(Tensor::new(Urgb, &[h_, w_]).map(Blob::new));
         let ans = ans_.0.get_mut();
 
         let [w, h] = self.shape();
@@ -140,7 +144,7 @@ where
 
 impl ImageGrid {
     #[inline]
-    pub fn whole(&self) -> &Image<Vec<u8>> {
+    pub fn whole(&self) -> &Image<Blob> {
         &self.whole
     }
 
@@ -164,6 +168,14 @@ impl ImageGrid {
                 .index(0, y)
                 .index(0, x),
         )
+    }
+
+    /// [u8;3] 转 [f32;3]
+    pub fn normalize(&self, mean: [f32; 3], std: [f32; 3]) -> Self {
+        Self {
+            grid: self.grid.as_ref().map(|data| normalize(data, mean, std)),
+            whole: Image(normalize(&self.whole.0, mean, std)),
+        }
     }
 }
 
@@ -232,6 +244,30 @@ fn refine_patch_size(
     )
 }
 
+/// 将整型表示的 rgb 值转换为归一化浮点表示
+fn normalize<T>(data: &Tensor<T>, mean: [f32; 3], std: [f32; 3]) -> Tensor<Blob>
+where
+    T: Deref<Target = [u8]>,
+{
+    assert_eq!(data.dt(), Urgb);
+    let mut ans = Tensor::new(Frgb, data.shape()).map(Blob::new);
+
+    let src = &**data.get();
+    let ([], dst, []) = (unsafe { ans.get_mut().align_to_mut::<f32>() }) else {
+        unreachable!()
+    };
+
+    assert_eq!(dst.len(), src.len());
+    assert_eq!(dst.len() % 3, 0);
+    for i in 0..dst.len() / 3 {
+        for (dst, &src, mean, std) in izip!(&mut dst[i * 3..], &src[i * 3..], mean, std) {
+            *dst = (src as f32 / 255. - mean) / std;
+        }
+    }
+
+    ans
+}
+
 #[test]
 fn test() {
     use std::time::Instant;
@@ -245,7 +281,9 @@ fn test() {
     println!("load image {:?}", time.elapsed());
 
     let time = Instant::now();
-    let slices = image.slice_uhd(9, 448, 14);
+    let slices = image
+        .slice_uhd(9, 448, 14)
+        .normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]);
     println!("slice image {:?}", time.elapsed());
 
     let [x, y] = slices.grid();
