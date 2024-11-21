@@ -52,7 +52,7 @@ where
     }
 }
 
-impl<'blk> Weights {
+impl Weights {
     pub fn new(
         model: &LlamaStorage<&'_ [u8]>,
         range: impl RangeBounds<usize> + Clone,
@@ -73,9 +73,9 @@ impl<'blk> Weights {
 
         Self(LlamaStorage {
             meta,
-            token_embd: from_host(&model.token_embd),
-            output_norm: from_host(&model.output_norm),
-            output: from_host(&model.output),
+            token_embd: from_host(model.token_embd),
+            output_norm: from_host(model.output_norm),
+            output: from_host(model.output),
             blocks: model
                 .blocks
                 .iter()

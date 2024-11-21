@@ -2,10 +2,7 @@ mod fmt;
 mod operators;
 mod split;
 
-use ggus::ggml_quants::{
-    digit_layout::{self, DigitLayout},
-    DataBlock,
-};
+use ggus::ggml_quants::digit_layout::DigitLayout;
 use ndarray_layout::{ArrayLayout, Endian::BigEndian};
 use std::{
     ops::{Deref, DerefMut, Range},
@@ -24,7 +21,7 @@ pub struct Tensor<T> {
 
 impl Tensor<usize> {
     pub fn new(dt: DigitLayout, shape: &[usize]) -> Self {
-        let ele = dt_size(dt);
+        let ele = dt.nbytes();
         Self {
             dt,
             layout: ArrayLayout::new_contiguous(shape, BigEndian, ele),
@@ -108,20 +105,7 @@ impl<T> Tensor<T> {
         let &[size] = layout.shape() else {
             unreachable!()
         };
-        Some(size * dt_size(self.dt))
-    }
-
-    #[inline]
-    pub fn to_bytes_layout(self) -> Self {
-        let mut shape = self.shape().to_vec();
-        let mut strides = self.strides().to_vec();
-        shape.push(dt_size(self.dt));
-        strides.push(1);
-        Self {
-            dt: digit_layout::types::U8,
-            layout: ArrayLayout::new(&shape, &strides, self.offset() as _),
-            physical: self.physical,
-        }
+        Some(size * self.dt.group_size())
     }
 }
 
@@ -239,8 +223,8 @@ where
         Operator as _,
     };
 
-    let mut dst = dst.map_slice_mut().to_bytes_layout();
-    let src = src.map_slice().to_bytes_layout();
+    let mut dst = dst.map_slice_mut();
+    let src = src.map_slice();
 
     Rearrange::new(&Cpu)
         .launch(
@@ -254,99 +238,4 @@ where
             &ThisThread,
         )
         .unwrap()
-}
-
-pub const fn dt_size(dt: DigitLayout) -> usize {
-    use ggus::ggml_quants::{
-        bf16, digit_layout::types as primitive, f16, types as quantized, IQ1M, IQ1S, IQ2S, IQ2XS,
-        IQ2XXS, IQ3S, IQ3XXS, IQ4NL, IQ4XS, Q2K, Q3K, Q4K, Q4_0, Q4_0_4_4, Q4_0_4_8, Q4_0_8_8,
-        Q4_1, Q5K, Q5_0, Q5_1, Q6K, Q8K, Q8_0, Q8_1,
-    };
-    #[rustfmt::skip]
-    let ans = match dt {
-        primitive::U8       => size_of::<u8      >(),
-        primitive::I8       => size_of::<i8      >(),
-        primitive::U16      => size_of::<u16     >(),
-        primitive::I16      => size_of::<i16     >(),
-        primitive::F16      => size_of::<f16     >(),
-        primitive::BF16     => size_of::<bf16    >(),
-        primitive::U32      => size_of::<u32     >(),
-        primitive::I32      => size_of::<i32     >(),
-        primitive::F32      => size_of::<f32     >(),
-        primitive::U64      => size_of::<u64     >(),
-        primitive::I64      => size_of::<i64     >(),
-        primitive::F64      => size_of::<f64     >(),
-        quantized::IQ1M     => size_of::<IQ1M    >(),
-        quantized::IQ1S     => size_of::<IQ1S    >(),
-        quantized::IQ2S     => size_of::<IQ2S    >(),
-        quantized::IQ2XS    => size_of::<IQ2XS   >(),
-        quantized::IQ2XXS   => size_of::<IQ2XXS  >(),
-        quantized::IQ3S     => size_of::<IQ3S    >(),
-        quantized::IQ3XXS   => size_of::<IQ3XXS  >(),
-        quantized::IQ4NL    => size_of::<IQ4NL   >(),
-        quantized::IQ4XS    => size_of::<IQ4XS   >(),
-        quantized::Q2K      => size_of::<Q2K     >(),
-        quantized::Q3K      => size_of::<Q3K     >(),
-        quantized::Q4_0     => size_of::<Q4_0    >(),
-        quantized::Q4_0_4_4 => size_of::<Q4_0_4_4>(),
-        quantized::Q4_0_4_8 => size_of::<Q4_0_4_8>(),
-        quantized::Q4_0_8_8 => size_of::<Q4_0_8_8>(),
-        quantized::Q4_1     => size_of::<Q4_1    >(),
-        quantized::Q4K      => size_of::<Q4K     >(),
-        quantized::Q5_0     => size_of::<Q5_0    >(),
-        quantized::Q5_1     => size_of::<Q5_1    >(),
-        quantized::Q5K      => size_of::<Q5K     >(),
-        quantized::Q6K      => size_of::<Q6K     >(),
-        quantized::Q8_0     => size_of::<Q8_0    >(),
-        quantized::Q8_1     => size_of::<Q8_1    >(),
-        quantized::Q8K      => size_of::<Q8K     >(),
-        _                   =>               todo!(),
-    };
-    ans
-}
-
-pub const fn block_size(dt: DigitLayout) -> usize {
-    use ggus::ggml_quants::{
-        digit_layout::types as primitive, types as quantized, IQ1M, IQ1S, IQ2S, IQ2XS, IQ2XXS,
-        IQ3S, IQ3XXS, IQ4NL, IQ4XS, Q2K, Q3K, Q4K, Q4_0, Q4_1, Q5K, Q5_0, Q5_1, Q6K, Q8K, Q8_0,
-        Q8_1,
-    };
-    #[rustfmt::skip]
-    let ans = match dt {
-        primitive::U8   |
-        primitive::I8   |
-        primitive::U16  |
-        primitive::I16  |
-        primitive::F16  |
-        primitive::BF16 |
-        primitive::U32  |
-        primitive::I32  |
-        primitive::F32  |
-        primitive::U64  |
-        primitive::I64  |
-        primitive::F64    => 1,
-        quantized::IQ1M   => IQ1M  ::COUNT,
-        quantized::IQ1S   => IQ1S  ::COUNT,
-        quantized::IQ2S   => IQ2S  ::COUNT,
-        quantized::IQ2XS  => IQ2XS ::COUNT,
-        quantized::IQ2XXS => IQ2XXS::COUNT,
-        quantized::IQ3S   => IQ3S  ::COUNT,
-        quantized::IQ3XXS => IQ3XXS::COUNT,
-        quantized::IQ4NL  => IQ4NL ::COUNT,
-        quantized::IQ4XS  => IQ4XS ::COUNT,
-        quantized::Q2K    => Q2K   ::COUNT,
-        quantized::Q3K    => Q3K   ::COUNT,
-        quantized::Q4_0   => Q4_0  ::COUNT,
-        quantized::Q4_1   => Q4_1  ::COUNT,
-        quantized::Q4K    => Q4K   ::COUNT,
-        quantized::Q5_0   => Q5_0  ::COUNT,
-        quantized::Q5_1   => Q5_1  ::COUNT,
-        quantized::Q5K    => Q5K   ::COUNT,
-        quantized::Q6K    => Q6K   ::COUNT,
-        quantized::Q8_0   => Q8_0  ::COUNT,
-        quantized::Q8_1   => Q8_1  ::COUNT,
-        quantized::Q8K    => Q8K   ::COUNT,
-        _                 => todo!(),
-    };
-    ans
 }

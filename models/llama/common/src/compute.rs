@@ -12,7 +12,7 @@ use operators::{
     ByteOf, Hardware, LaunchError, Operator, QueueAlloc, QueueOf, TopoNode, Workspace,
 };
 use std::ops::{Deref, DerefMut};
-use tensor::{dt_size, split, Tensor};
+use tensor::{split, Tensor};
 
 pub trait Operators {
     type Hardware: Hardware;
@@ -119,7 +119,7 @@ impl<Ops: Operators, W> LlamaWorker<Ops, W> {
             ..
         } = self.meta;
 
-        let ele = dt_size(dt_mat);
+        let ele = dt_mat.nbytes();
         let embd = nt * d * ele;
         let qkv = nt * (nh + nkvh + nkvh) * dh * ele;
         let gate_up = nt * di * 2 * ele;

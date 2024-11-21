@@ -1,4 +1,4 @@
-﻿use gguf::ggml_quants::digit_layout::types as ty;
+﻿use gguf::ggml_quants::digit_layout::layout;
 use image::ImageReader;
 use std::{ops::Deref, path::Path};
 use tensor::{rearrange, Tensor};
@@ -11,20 +11,22 @@ pub struct ImageGrid {
     whole: Image<Vec<u8>>,
 }
 
+layout!(RGB u(8); 3);
+
 impl Image<Vec<u8>> {
     /// 从文件加载
     pub fn load(path: impl AsRef<Path>) -> Self {
         let rgb8 = ImageReader::open(path).unwrap().decode().unwrap().to_rgb8();
         let (x, y) = rgb8.dimensions();
-        assert_eq!(rgb8.as_raw().len(), 3 * (x * y) as usize);
-        Self(Tensor::new(ty::U8, &[y as usize, x as usize, 3]).map(|_| rgb8.into_raw()))
+        assert_eq!(rgb8.as_raw().len(), RGB.nbytes() * (x * y) as usize);
+        Self(Tensor::new(RGB, &[y as usize, x as usize]).map(|_| rgb8.into_raw()))
     }
 }
 
 impl<T> Image<T> {
     #[inline]
     pub fn shape(&self) -> [usize; 2] {
-        let &[h, w, 3] = self.0.shape() else {
+        let &[h, w] = self.0.shape() else {
             unreachable!()
         };
         [w, h]
@@ -63,7 +65,7 @@ where
                     .tile(1, &[grid_x, patch_w])
                     .tile(0, &[grid_y, patch_h])
                     .transpose(&[2, 1]);
-                let mut ans = Tensor::new(ty::U8, tiled.shape()).map(|size| vec![0; size]);
+                let mut ans = Tensor::new(RGB, tiled.shape()).map(|size| vec![0; size]);
                 rearrange(&mut ans, &tiled.map_slice());
 
                 Some(ans)
@@ -79,7 +81,7 @@ where
 
     /// 双三次插值缩放
     fn bicubic_resize(&self, [w_, h_]: [usize; 2]) -> Image<Vec<u8>> {
-        let mut ans_ = Image(Tensor::new(ty::U8, &[h_, w_, 3]).map(|size| vec![0; size]));
+        let mut ans_ = Image(Tensor::new(RGB, &[h_, w_]).map(|size| vec![0; size]));
         let ans = ans_.0.get_mut();
 
         let [w, h] = self.shape();
@@ -144,7 +146,7 @@ impl ImageGrid {
 
     pub fn grid(&self) -> [usize; 2] {
         if let Some(grid) = &self.grid {
-            let &[y, x, _, _, 3] = grid.shape() else {
+            let &[y, x, _, _] = grid.shape() else {
                 unreachable!()
             };
             [x, y]
