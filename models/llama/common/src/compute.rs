@@ -179,6 +179,7 @@ where
 
         let pos = Tensor::new(ty::U32, &[nt]).map(|_| {
             Ops::Rope::build_pos(
+                ty::U32,
                 nt,
                 requests.iter().map(|req| Seq {
                     pos: req.pos,

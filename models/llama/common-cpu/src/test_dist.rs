@@ -3,8 +3,9 @@ use gguf::GGufModel;
 use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
 use operators::{
     all_reduce::common_cpu::Operator as AllReduce,
-    common_cpu::{Blob, Cpu, InprocNode, ThisThread},
+    common_cpu::{Cpu, InprocNode, ThisThread},
     random_sample::{KVPair, SampleArgs},
+    Blob,
 };
 use std::{
     iter::zip,

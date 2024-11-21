@@ -3,13 +3,13 @@ mod operators;
 mod split;
 
 use ggus::ggml_quants::digit_layout::DigitLayout;
-use ndarray_layout::{ArrayLayout, Endian::BigEndian};
 use std::{
     ops::{Deref, DerefMut, Range},
     slice::{from_raw_parts, from_raw_parts_mut},
 };
 
-pub use ::operators::common_cpu::Blob;
+pub use ::operators::Blob;
+pub use ndarray_layout::{ArrayLayout, Endian};
 pub use operators::RandomSample;
 pub use split::{LocalSplitable, Splitable};
 
@@ -25,7 +25,7 @@ impl Tensor<usize> {
         let ele = dt.nbytes();
         Self {
             dt,
-            layout: ArrayLayout::new_contiguous(shape, BigEndian, ele),
+            layout: ArrayLayout::new_contiguous(shape, Endian::BigEndian, ele),
             physical: shape.iter().product::<usize>() * ele,
         }
     }
@@ -33,6 +33,15 @@ impl Tensor<usize> {
 
 /// access
 impl<T> Tensor<T> {
+    #[inline]
+    pub const fn from_parts(dt: DigitLayout, layout: ArrayLayout<5>, physical: T) -> Self {
+        Self {
+            dt,
+            layout,
+            physical,
+        }
+    }
+
     #[inline]
     pub const fn dt(&self) -> DigitLayout {
         self.dt

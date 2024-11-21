@@ -4,8 +4,9 @@ use llama::{
     ext::ggml_quants::f16, LlamaArgs, LlamaMeta, LlamaRequest, LlamaStorage, LlamaWorker, Tensor,
 };
 use operators::{
-    common_cpu::{Blob, Cpu, ThisThread},
+    common_cpu::{Cpu, ThisThread},
     random_sample::{KVPair, SampleArgs},
+    Blob,
 };
 use std::slice::from_raw_parts_mut;
 use test_utils::{Inference, TokenizerAndPrompt};

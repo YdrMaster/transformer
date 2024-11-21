@@ -6,10 +6,10 @@ use llama::{
 };
 use operators::{
     all_reduce::{AllReduce, NonAllReduce},
-    common_cpu::{Blob, Cpu},
+    common_cpu::Cpu,
     random_sample::common_cpu::Operator as RandomSampleCpu,
     rearrange::common_cpu::Operator as Rearrange,
-    ByteOf, QueueOf, TopoNode,
+    Blob, ByteOf, QueueOf, TopoNode,
 };
 use std::{
     cell::Ref,
