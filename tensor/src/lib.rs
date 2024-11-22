@@ -33,12 +33,70 @@ impl Tensor<usize> {
 
 /// access
 impl<T> Tensor<T> {
-    #[inline]
-    pub const fn from_parts(dt: DigitLayout, layout: ArrayLayout<5>, physical: T) -> Self {
-        Self {
+    /// 打开数组数据类型
+    pub fn destruct_array(&self) -> Tensor<&T> {
+        use ggus::ggml_quants::digit_layout::LayoutContent::{Real, Unsigned};
+        use std::iter::once;
+
+        let len = self.dt.group_size();
+        let dt = match self.dt.decode() {
+            Unsigned { width } if len > 1 => DigitLayout::unsigned(width as _, 1),
+            Real { exponent, mantissa } if len > 1 => {
+                DigitLayout::real(exponent as _, mantissa as _, 1)
+            }
+            _ => return self.as_ref(),
+        };
+        let layout = &self.layout;
+        let shape = layout
+            .shape()
+            .iter()
+            .cloned()
+            .chain(once(len))
+            .collect::<Vec<_>>();
+        let strides = layout
+            .strides()
+            .iter()
+            .cloned()
+            .chain(once(dt.nbytes() as _))
+            .collect::<Vec<_>>();
+        let offset = layout.offset();
+        Tensor {
             dt,
-            layout,
-            physical,
+            layout: ArrayLayout::new(&shape, &strides, offset),
+            physical: &self.physical,
+        }
+    }
+
+    /// 返回一个转换了数据类型的张量，仅用于在 group size 相同且稠密存储的情况下转换
+    pub fn cast(&self, target: DigitLayout) -> Tensor<usize> {
+        assert_eq!(self.dt.group_size(), target.group_size());
+
+        let merged = self
+            .layout
+            .merge(0..self.layout.ndim())
+            .expect("dense tensor is castable");
+        let &[d] = merged.shape() else { unreachable!() };
+        let &[s] = merged.strides() else {
+            unreachable!()
+        };
+
+        let div = self.dt.nbytes() as isize;
+        let mul = target.nbytes() as isize;
+        assert_eq!(div, s.abs());
+
+        let shape = self.shape();
+        let strides = self.strides();
+
+        assert!(strides.iter().all(|s| s % div == 0));
+        let strides = self
+            .strides()
+            .iter()
+            .map(|s| s / div * mul)
+            .collect::<Vec<_>>();
+        Tensor {
+            dt: target,
+            layout: ArrayLayout::new(shape, &strides, 0),
+            physical: d * mul as usize,
         }
     }
 
@@ -104,9 +162,27 @@ impl<T> Tensor<T> {
         }
     }
 
+    /// 判断张量是否完全连续。
     #[inline]
     pub fn is_contiguous(&self) -> bool {
-        self.layout.merge(0..self.layout.ndim()).is_some()
+        // 任意相邻的两个维度可以合并表示张量完全连续
+        (2..=self.layout.ndim()).all(|i| self.layout.merge(i - 2..i).is_some())
+    }
+
+    /// 判断张量是否稠密存储。
+    #[inline]
+    pub fn is_dense(&self) -> bool {
+        // 张量为稠密存储，当：
+        self.layout
+            // 所有维度可以合并成一个
+            .merge(0..self.layout.ndim())
+            // 合并后元素之间步长等于元素的长度
+            .map_or(false, |layout| {
+                let [s] = layout.strides() else {
+                    unreachable!()
+                };
+                s.abs() == self.dt.nbytes() as isize
+            })
     }
 
     #[inline]
@@ -115,7 +191,7 @@ impl<T> Tensor<T> {
         let &[size] = layout.shape() else {
             unreachable!()
         };
-        Some(size * self.dt.group_size())
+        Some(size * self.dt.nbytes())
     }
 }
 

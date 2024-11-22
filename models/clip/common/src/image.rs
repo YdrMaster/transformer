@@ -1,9 +1,9 @@
-﻿use gguf::ggml_quants::digit_layout::{layout, types as ty};
+﻿use def::*;
 use image::ImageReader;
 use itertools::izip;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{iter::zip, ops::Deref, path::Path, slice::from_raw_parts_mut};
-use tensor::{rearrange, ArrayLayout, Blob, Tensor};
+use tensor::{rearrange, Blob, Tensor};
 
 #[repr(transparent)]
 pub struct Image<T>(Tensor<T>);
@@ -13,11 +13,19 @@ pub struct ImageGrid {
     whole: Image<Blob>,
 }
 
-layout!(Urgb u(8)     ; 3); // [u8 ; 3]
-layout!(Frgb e(8)m(23); 3); // [f32; 3]
-
 #[allow(non_camel_case_types)]
-type fdim = f64;
+mod def {
+    use gguf::ggml_quants::digit_layout::layout;
+    layout!(Urgb u(8)     ; 3);
+    layout!(Frgb e(8)m(23); 3);
+
+    /// 有图像尺寸参与的浮点运算应使用这个类型
+    pub type fdim = f64;
+    /// 基本的 rgb 类型
+    pub type urgb = [u8; 3];
+    /// 归一化浮点表示的 rgb 类型
+    pub type frgb = [f32; 3];
+}
 
 impl Image<Vec<u8>> {
     /// 从文件加载
@@ -93,38 +101,39 @@ where
 
         let [w, h] = self.shape();
         let data = &**self.0.get();
-        let kw = w as f32 / w_ as f32;
-        let kh = h as f32 / h_ as f32;
+        let kw = w as fdim / w_ as fdim;
+        let kh = h as fdim / h_ as fdim;
 
-        (0..h_).into_par_iter().for_each(|y_| {
+        (0..h_ * w_).into_par_iter().for_each(|i| {
             let dst = unsafe { from_raw_parts_mut(ptr as *mut u8, len) };
-            for x_ in 0..w_ {
-                let x = kw * x_ as f32;
-                let y = kh * y_ as f32;
-                let dx = x - x.floor();
-                let dy = y - y.floor();
-                // 在原图中的坐标
-                let x = x as isize;
-                let y = y as isize;
-                // 插值循环
-                for rgb in 0..3 {
-                    let mut c = [0.; 4];
-                    for ic in 0..=3 {
-                        let data = |y: isize, x: isize| {
-                            let x = x.clamp(0, w as isize - 1) as usize;
-                            let y = y.clamp(0, h as isize - 1) as usize;
-                            data[(y * w + x) * 3 + rgb] as f32
-                        };
-                        c[ic as usize] = calc(|i| data(y - 1 + ic, x - 1 + i as isize), dx);
+            let y_ = i / w_;
+            let x_ = i % w_;
 
-                        let cc = calc(|i| c[i], dy);
-                        dst[(y_ * w_ + x_) * 3 + rgb] = cc.round().clamp(0., 255.) as _;
-                    }
+            let x = kw * x_ as fdim;
+            let y = kh * y_ as fdim;
+            let dx = x - x.floor();
+            let dy = y - y.floor();
+            // 在原图中的坐标
+            let x = x as isize;
+            let y = y as isize;
+            // 插值循环
+            for rgb in 0..3 {
+                let mut c = [0.; 4];
+                for ic in 0..=3 {
+                    let data = |y: isize, x: isize| {
+                        let x = x.clamp(0, w as isize - 1) as usize;
+                        let y = y.clamp(0, h as isize - 1) as usize;
+                        data[(y * w + x) * 3 + rgb] as fdim
+                    };
+                    c[ic as usize] = calc(|i| data(y - 1 + ic, x - 1 + i as isize), dx);
+
+                    let cc = calc(|i| c[i], dy);
+                    dst[(y_ * w_ + x_) * 3 + rgb] = cc.round().clamp(0., 255.) as _;
                 }
             }
         });
 
-        fn calc(c: impl Fn(usize) -> f32, d: f32) -> f32 {
+        fn calc(c: impl Fn(usize) -> fdim, d: fdim) -> fdim {
             let a0 = c(1);
             let d0 = c(0) - a0;
             let d2 = c(2) - a0;
@@ -148,16 +157,12 @@ where
     /// NHWC rgb Tensor -> NCHW value Tensor
     #[inline]
     pub fn to_nchw(&self) -> Tensor<Blob> {
-        let [w, h] = self.shape();
-        let strides = self.0.strides();
-        let layout = ArrayLayout::new(&[1, h, w, 3], &[0, strides[0], strides[1], 1], 0);
-
-        let ty = match self.0.dt() {
-            self::Urgb => ty::U8,
-            self::Frgb => ty::F32,
-            _ => unreachable!(),
-        };
-        let src = Tensor::from_parts(ty, layout, &**self.0.get()).transpose(&[3, 1, 2]);
+        let src = self
+            .0
+            .destruct_array()
+            .map(|t| &**t)
+            .transpose(&[2, 0, 1])
+            .tile(0, &[1, 3]);
 
         let mut ans = Tensor::new(src.dt(), src.shape()).map(Blob::new);
         rearrange(&mut ans, &src);
@@ -193,8 +198,8 @@ impl ImageGrid {
         )
     }
 
-    /// [u8;3] 转 [f32;3]
-    pub fn normalize(&self, mean: [f32; 3], std: [f32; 3]) -> Self {
+    /// [urgb] 转 [frgb]
+    pub fn normalize(&self, mean: frgb, std: frgb) -> Self {
         Self {
             grid: self.grid.as_ref().map(|data| normalize(data, mean, std)),
             whole: Image(normalize(&self.whole.0, mean, std)),
@@ -268,18 +273,17 @@ fn refine_patch_size(
 }
 
 /// 将整型表示的 rgb 值转换为归一化浮点表示
-fn normalize<T>(data: &Tensor<T>, mean: [f32; 3], std: [f32; 3]) -> Tensor<Blob>
+fn normalize<T>(data: &Tensor<T>, mean: frgb, std: frgb) -> Tensor<Blob>
 where
     T: Deref<Target = [u8]>,
 {
     assert_eq!(data.dt(), Urgb);
-    assert!(data.is_contiguous());
-    let mut ans = Tensor::new(Frgb, data.shape()).map(Blob::new);
+    let mut ans = data.cast(Frgb).map(Blob::new);
 
-    let ([], src, []) = (unsafe { data.get().align_to::<[u8; 3]>() }) else {
+    let ([], src, []) = (unsafe { data.get().align_to::<urgb>() }) else {
         unreachable!()
     };
-    let ([], dst, []) = (unsafe { ans.get_mut().align_to_mut::<[f32; 3]>() }) else {
+    let ([], dst, []) = (unsafe { ans.get_mut().align_to_mut::<frgb>() }) else {
         unreachable!()
     };
 
