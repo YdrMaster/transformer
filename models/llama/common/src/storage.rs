@@ -215,12 +215,12 @@ impl<'w> BlkStorage<&'w [u8]> {
 }
 
 #[test]
-fn test_load() {
+fn test() {
     use test_utils::Inference;
     let Some(Inference { model, .. }) = Inference::load() else {
         return;
     };
     let gguf = GGufModel::read(model.iter().map(|s| &**s));
-    let llama = Storage::from_gguf(&gguf);
-    println!("{:?}", llama.meta);
+    let storage = Storage::from_gguf(&gguf);
+    println!("{:#?}", storage.meta);
 }

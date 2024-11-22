@@ -1,9 +1,11 @@
 mod image;
+mod storage;
 
 use gguf::ggml_quants::digit_layout::DigitLayout;
 use tensor::Tensor;
 
 pub use image::{Image, ImageGrid};
+pub use storage::Storage as ClipStorage;
 
 #[derive(Clone, Debug)]
 pub struct ClipMeta {
@@ -21,6 +23,8 @@ pub struct ClipMeta {
     pub d: usize,
     pub di: usize,
 
+    pub image_mean: [f32; 3],
+    pub image_std: [f32; 3],
     pub epsilon: f32,
 }
 
@@ -63,7 +67,13 @@ impl ClipMeta {
         }
     }
 
-    pub fn embd(&self) -> Tensor<usize> {
-        Tensor::new(self.dt_embd, &[self.n_patch(), self.n_mmproj_embd()])
+    pub fn patch_embd(&self) -> Tensor<usize> {
+        let &Self { d, d_patch, .. } = self;
+        Tensor::new(self.dt_mat, &[d, 3, d_patch, d_patch])
+    }
+
+    pub fn patch_embd_bias(&self) -> Tensor<usize> {
+        let &Self { d, .. } = self;
+        Tensor::new(self.dt_bias, &[d])
     }
 }

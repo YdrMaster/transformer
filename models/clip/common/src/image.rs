@@ -160,7 +160,6 @@ where
     }
 
     /// NHWC rgb Tensor -> NCHW value Tensor
-    #[inline]
     pub fn to_nchw(&self) -> Tensor<&[u8]> {
         self.0
             .destruct_array()
@@ -176,6 +175,7 @@ impl ImageGrid {
         &self.whole
     }
 
+    #[inline]
     pub fn grid(&self) -> [usize; 2] {
         if let Some(grid) = &self.grid {
             let &[y, x, _, _] = grid.shape() else {

@@ -12,6 +12,7 @@ members = [
     "models/llama/ascend",
 
     "models/clip/common",
+    "models/clip/common-cpu",
 ]
 resolver = "2"
 
