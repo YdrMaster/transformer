@@ -28,7 +28,7 @@ itertools = "0.13"
 build-script-cfg = "0.0"
 
 ndarray-layout = { git = "https://github.com/YdrMaster/ndarray-layout", rev = "48d36c5" }
-operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "48892b8", default-features = false }
+operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "1b08473", default-features = false }
 
 search-cl-tools = { git = "https://github.com/InfiniTensor/clrt", rev = "6846d52" }
 search-cuda-tools = { git = "https://github.com/YdrMaster/cuda-driver", rev = "e2ec203" }

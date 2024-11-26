@@ -1,11 +1,21 @@
+mod args;
+mod compute;
 mod image;
 mod storage;
 
 use gguf::ggml_quants::digit_layout::DigitLayout;
-use tensor::Tensor;
 
+pub use args::Args as ClipArgs;
+pub use compute::{ClipWorker, Operators, WeightLoader};
 pub use image::{Image, ImageGrid};
 pub use storage::Storage as ClipStorage;
+pub use tensor::Tensor;
+pub mod ext {
+    pub use gguf::{
+        ext::{utok, Mmap},
+        ggml_quants,
+    };
+}
 
 #[derive(Clone, Debug)]
 pub struct ClipMeta {
@@ -67,12 +77,12 @@ impl ClipMeta {
         }
     }
 
-    pub fn patch_embd(&self) -> Tensor<usize> {
+    pub fn patch_embd_w(&self) -> Tensor<usize> {
         let &Self { d, d_patch, .. } = self;
         Tensor::new(self.dt_mat, &[d, 3, d_patch, d_patch])
     }
 
-    pub fn patch_embd_bias(&self) -> Tensor<usize> {
+    pub fn patch_embd_b(&self) -> Tensor<usize> {
         let &Self { d, .. } = self;
         Tensor::new(self.dt_bias, &[d])
     }

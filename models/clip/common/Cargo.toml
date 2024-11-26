@@ -10,6 +10,7 @@ authors = ["YdrMaster <ydrml@hotmail.com>"]
 common.workspace = true
 gguf.workspace = true
 tensor.workspace = true
+operators.workspace = true
 itertools.workspace = true
 image = "0.25"
 rayon = "1.10"
