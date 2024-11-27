@@ -56,19 +56,15 @@ fn test_infer() {
         )
         .unwrap();
 
-    let [x, y] = slices.grid();
-    for i in 0..y {
-        for j in 0..x {
-            let patch = slices.patch(j, i);
-            worker
-                .launch(
-                    ClipArgs {
-                        raw: patch.to_nchw(),
-                    },
-                    &mut [],
-                    &ThisThread,
-                )
-                .unwrap();
-        }
+    if let Some(patches) = slices.patches_nchw() {
+        worker
+            .launch(
+                ClipArgs {
+                    raw: patches.map_slice(),
+                },
+                &mut [],
+                &ThisThread,
+            )
+            .unwrap();
     }
 }

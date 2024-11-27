@@ -3,7 +3,10 @@ use operators::{
     conv::{self, Conv},
     ByteOf, Hardware, LaunchError, Operator, QueueAlloc, QueueOf, TopoNode,
 };
-use std::ops::{Deref, DerefMut};
+use std::{
+    ops::{Deref, DerefMut},
+    time::Instant,
+};
 use tensor::Tensor;
 
 pub trait Operators {
@@ -60,6 +63,7 @@ where
     where
         QA: QueueAlloc<Hardware = Ops::Hardware>,
     {
+        let time = Instant::now();
         let Args { raw } = args;
         let queue = queue_alloc.queue();
 
@@ -74,7 +78,13 @@ where
         };
 
         let mut embd = Tensor::new(dt_embd, &[n, m, h / hk, w / wk]).map(|s| queue_alloc.alloc(s));
-        self.conv(&mut embd, &raw, &k, &b, workspace, queue_alloc)
+        self.conv(&mut embd, &raw, &k, &b, workspace, queue_alloc)?;
+
+        if self.debug {
+            println!("encode {n} x {h} x {w} image in {:?}", time.elapsed());
+        }
+
+        Ok(())
     }
 }
 

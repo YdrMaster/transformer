@@ -34,19 +34,30 @@ impl Tensor<usize> {
 /// access
 impl<T> Tensor<T> {
     /// 打开数组数据类型
-    pub fn destruct_array(&self) -> Tensor<&T> {
+    pub fn destruct_array(self) -> Self {
         use ggus::ggml_quants::digit_layout::LayoutContent::{Real, Unsigned};
         use std::iter::once;
 
-        let len = self.dt.group_size();
-        let dt = match self.dt.decode() {
+        let Self {
+            dt,
+            layout,
+            physical,
+        } = self;
+
+        let len = dt.group_size();
+        let dt = match dt.decode() {
             Unsigned { width } if len > 1 => DigitLayout::unsigned(width as _, 1),
             Real { exponent, mantissa } if len > 1 => {
                 DigitLayout::real(exponent as _, mantissa as _, 1)
             }
-            _ => return self.as_ref(),
+            _ => {
+                return Self {
+                    dt,
+                    layout,
+                    physical,
+                }
+            }
         };
-        let layout = &self.layout;
         let shape = layout
             .shape()
             .iter()
@@ -63,7 +74,7 @@ impl<T> Tensor<T> {
         Tensor {
             dt,
             layout: ArrayLayout::new(&shape, &strides, offset),
-            physical: &self.physical,
+            physical,
         }
     }
 

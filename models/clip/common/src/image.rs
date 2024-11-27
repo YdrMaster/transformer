@@ -1,4 +1,5 @@
-﻿use def::*;
+﻿use common::{borrow, own, Contiguous};
+use def::*;
 use gguf::ggml_quants::{
     digit_layout::{types as ty, DigitLayout},
     f16,
@@ -7,7 +8,7 @@ use image::ImageReader;
 use itertools::izip;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{iter::zip, ops::Deref, path::Path, slice::from_raw_parts_mut};
-use tensor::{Blob, Tensor};
+use tensor::{rearrange, Blob, Tensor};
 
 #[repr(transparent)]
 pub struct Image<T>(Tensor<T>);
@@ -161,11 +162,7 @@ where
 
     /// NHWC rgb Tensor -> NCHW value Tensor
     pub fn to_nchw(&self) -> Tensor<&[u8]> {
-        self.0
-            .destruct_array()
-            .map(|t| &**t)
-            .transpose(&[2, 0, 1])
-            .tile(0, &[1, 3])
+        rgb_to_chw(&self.0).tile(0, &[1, 3])
     }
 }
 
@@ -196,6 +193,19 @@ impl ImageGrid {
                 .index(0, y)
                 .index(0, x),
         )
+    }
+
+    pub fn patches_nchw(&self) -> Option<Tensor<Contiguous<Blob>>> {
+        self.grid.as_ref().map(|data| {
+            let xychw = rgb_to_chw(data);
+            if let Some(nchw) = xychw.as_ref().merge(0..2) {
+                nchw.map(|s| borrow(s))
+            } else {
+                let mut blob = Tensor::new(xychw.dt(), xychw.shape()).map(Blob::new);
+                rearrange(&mut blob, &xychw);
+                blob.merge(0..2).unwrap().map(own)
+            }
+        })
     }
 
     /// [urgb] 转 [frgb]
@@ -315,6 +325,16 @@ where
         _ => unreachable!(),
     }
     ans
+}
+
+fn rgb_to_chw<T>(data: &Tensor<T>) -> Tensor<&[u8]>
+where
+    T: Deref<Target = [u8]>,
+{
+    let ndim = data.shape().len();
+    data.map_slice()
+        .destruct_array()
+        .transpose(&[ndim, ndim - 2, ndim - 1])
 }
 
 #[test]
