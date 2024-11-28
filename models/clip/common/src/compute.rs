@@ -64,7 +64,7 @@ where
         QA: QueueAlloc<Hardware = Ops::Hardware>,
     {
         let time = Instant::now();
-        let Args { raw } = args;
+        let Args { raw, .. } = args;
         let queue = queue_alloc.queue();
 
         let ClipMeta { dt_embd, .. } = self.meta;
@@ -79,6 +79,8 @@ where
 
         let mut embd = Tensor::new(dt_embd, &[n, m, h / hk, w / wk]).map(|s| queue_alloc.alloc(s));
         self.conv(&mut embd, &raw, &k, &b, workspace, queue_alloc)?;
+
+        let _embd = embd.merge(2..4).unwrap().transpose(&[2, 1]);
 
         if self.debug {
             println!("encode {n} x {h} x {w} image in {:?}", time.elapsed());
