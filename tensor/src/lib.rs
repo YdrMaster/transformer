@@ -293,6 +293,14 @@ impl<T> Tensor<T> {
     }
 
     #[inline]
+    pub fn broadcast(self, axis: usize, times: usize) -> Self {
+        Self {
+            layout: self.layout.broadcast(axis, times),
+            ..self
+        }
+    }
+
+    #[inline]
     pub fn merge(self, range: Range<usize>) -> Option<Self> {
         self.layout
             .merge(range)

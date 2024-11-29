@@ -38,6 +38,8 @@ pub struct ClipMeta {
     pub epsilon: f32,
 }
 
+pub const D_POS_EMBD: usize = 70;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum ProjectorType {
@@ -85,5 +87,10 @@ impl ClipMeta {
     pub fn patch_embd_b(&self) -> Tensor<usize> {
         let &Self { d, .. } = self;
         Tensor::new(self.dt_bias, &[d])
+    }
+
+    pub fn pos_embd(&self) -> Tensor<usize> {
+        let &Self { d, .. } = self;
+        Tensor::new(self.dt_embd, &[D_POS_EMBD.pow(2), d])
     }
 }

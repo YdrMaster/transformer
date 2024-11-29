@@ -1,5 +1,6 @@
 use super::{args::Args, ClipMeta};
 use operators::{
+    add_rows::{self, AddRows},
     conv::{self, Conv},
     ByteOf, Hardware, LaunchError, Operator, QueueAlloc, QueueOf, TopoNode,
 };
@@ -13,6 +14,7 @@ pub trait Operators {
     type Hardware: Hardware;
     type TopoNode: TopoNode<Self::Hardware>;
     type Conv: Conv<Self::Hardware>;
+    type AddRows: AddRows<Self::Hardware>;
 }
 
 pub trait WeightLoader {
@@ -22,12 +24,14 @@ pub trait WeightLoader {
         Self: 's;
 
     fn patch_embd<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Weight<'a>; 2];
+    fn pos_embd<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Weight<'a>;
 }
 
 pub struct ClipWorker<Ops: Operators, W> {
     meta: ClipMeta,
     weights: WeightDecorator<W>,
     conv: Ops::Conv,
+    add_rows: Ops::AddRows,
     pub debug: bool,
 }
 
@@ -38,6 +42,7 @@ impl<Ops: Operators, W> ClipWorker<Ops, W> {
             weights: meta.decorator(weights),
             meta,
             conv: Ops::Conv::new(processor),
+            add_rows: Ops::AddRows::new(processor),
             debug: true,
         }
     }
@@ -64,7 +69,7 @@ where
         QA: QueueAlloc<Hardware = Ops::Hardware>,
     {
         let time = Instant::now();
-        let Args { raw, .. } = args;
+        let Args { raw, pos } = args;
         let queue = queue_alloc.queue();
 
         let ClipMeta { dt_embd, .. } = self.meta;
@@ -80,7 +85,10 @@ where
         let mut embd = Tensor::new(dt_embd, &[n, m, h / hk, w / wk]).map(|s| queue_alloc.alloc(s));
         self.conv(&mut embd, &raw, &k, &b, workspace, queue_alloc)?;
 
-        let _embd = embd.merge(2..4).unwrap().transpose(&[2, 1]);
+        let mut embd = embd.merge(2..4).unwrap().transpose(&[2, 1]);
+
+        let pos_embd = self.weights.pos_embd(queue);
+        self.add_rows(&mut embd, &pos_embd, &pos, workspace, queue_alloc)?;
 
         if self.debug {
             println!("encode {n} x {h} x {w} image in {:?}", time.elapsed());
@@ -130,12 +138,41 @@ where
             queue_alloc,
         )
     }
+
+    fn add_rows<Dst, Src, Idx, QA>(
+        &self,
+        dst: &mut Tensor<Dst>,
+        src: &Tensor<Src>,
+        idx: &Tensor<Idx>,
+        workspace: &mut [ByteOf<Ops::Hardware>],
+        queue_alloc: &QA,
+    ) -> Result<(), LaunchError>
+    where
+        Dst: DerefMut<Target = [ByteOf<Ops::Hardware>]>,
+        Src: Deref<Target = [ByteOf<Ops::Hardware>]>,
+        Idx: Deref<Target = [ByteOf<Ops::Hardware>]>,
+        QA: QueueAlloc<Hardware = Ops::Hardware>,
+    {
+        self.add_rows.launch(
+            &add_rows::Args {
+                dst_layout: dst.layout(),
+                dst_base: dst.base_mut(),
+                src_layout: src.layout(),
+                src_base: src.base(),
+                idx_layout: idx.layout(),
+                idx_base: idx.base(),
+            },
+            workspace,
+            queue_alloc,
+        )
+    }
 }
 
 struct WeightDecorator<W> {
     weights: W,
     patch_embd_w: Tensor<usize>,
     patch_embd_b: Tensor<usize>,
+    pos_embd: Tensor<usize>,
 }
 
 impl ClipMeta {
@@ -143,6 +180,7 @@ impl ClipMeta {
         WeightDecorator {
             patch_embd_w: self.patch_embd_w(),
             patch_embd_b: self.patch_embd_b(),
+            pos_embd: self.pos_embd(),
             weights,
         }
     }
@@ -156,5 +194,11 @@ impl<W: WeightLoader> WeightDecorator<W> {
             self.patch_embd_w.clone().map(|_| w),
             self.patch_embd_b.clone().map(|_| b),
         ]
+    }
+
+    #[inline]
+    pub fn pos_embd<'a>(&'a self, queue: &'a QueueOf<W::Hardware>) -> Tensor<W::Weight<'a>> {
+        let pos_embd = self.weights.pos_embd(queue);
+        self.pos_embd.clone().map(|_| pos_embd)
     }
 }

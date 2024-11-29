@@ -6,11 +6,12 @@ pub struct Storage<T> {
     pub meta: ClipMeta,
     pub patch_embd_w: T,
     pub patch_embd_b: T,
+    pub pos_embd: T,
 }
 
 impl<'a> Storage<&'a [u8]> {
     pub fn from_gguf(gguf: &GGufModel<'a>) -> Self {
-        let position_embd = &gguf.tensors["v.position_embd.weight"];
+        let pos_embd = &gguf.tensors["v.position_embd.weight"];
         let patch_embd_w = &gguf.tensors["v.patch_embd.weight"];
         let patch_embd_b = &gguf.tensors["v.patch_embd.bias"];
 
@@ -27,7 +28,7 @@ impl<'a> Storage<&'a [u8]> {
             projector,
             minicpmv_version: gguf.get_usize("clip.minicpmv_version").unwrap() as _,
 
-            dt_embd: position_embd.ty,
+            dt_embd: pos_embd.ty,
             dt_mat :  patch_embd_w.ty,
             dt_bias:  patch_embd_b.ty,
 
@@ -47,6 +48,7 @@ impl<'a> Storage<&'a [u8]> {
             meta,
             patch_embd_w: patch_embd_w.data,
             patch_embd_b: patch_embd_b.data,
+            pos_embd: pos_embd.data,
         }
     }
 }
