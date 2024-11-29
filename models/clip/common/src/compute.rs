@@ -2,6 +2,7 @@ use super::{args::Args, ClipMeta};
 use operators::{
     add_rows::{self, AddRows},
     conv::{self, Conv},
+    layer_norm::{self, LayerNorm},
     ByteOf, Hardware, LaunchError, Operator, QueueAlloc, QueueOf, TopoNode,
 };
 use std::{
@@ -15,6 +16,7 @@ pub trait Operators {
     type TopoNode: TopoNode<Self::Hardware>;
     type Conv: Conv<Self::Hardware>;
     type AddRows: AddRows<Self::Hardware>;
+    type LayerNorm: LayerNorm<Self::Hardware>;
 }
 
 pub trait WeightLoader {
@@ -25,6 +27,9 @@ pub trait WeightLoader {
 
     fn patch_embd<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Weight<'a>; 2];
     fn pos_embd<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Weight<'a>;
+    fn pre_norm<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Option<[Self::Weight<'a>; 2]>;
+    fn post_norm<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>)
+        -> Option<[Self::Weight<'a>; 2]>;
 }
 
 pub struct ClipWorker<Ops: Operators, W> {
@@ -32,6 +37,7 @@ pub struct ClipWorker<Ops: Operators, W> {
     weights: WeightDecorator<W>,
     conv: Ops::Conv,
     add_rows: Ops::AddRows,
+    layer_norm: Ops::LayerNorm,
     pub debug: bool,
 }
 
@@ -43,6 +49,7 @@ impl<Ops: Operators, W> ClipWorker<Ops, W> {
             meta,
             conv: Ops::Conv::new(processor),
             add_rows: Ops::AddRows::new(processor),
+            layer_norm: Ops::LayerNorm::new(processor),
             debug: true,
         }
     }
@@ -89,6 +96,18 @@ where
 
         let pos_embd = self.weights.pos_embd(queue);
         self.add_rows(&mut embd, &pos_embd, &pos, workspace, queue_alloc)?;
+
+        if let Some([scale, bias]) = self.weights.pre_norm(queue) {
+            let inplace = unsafe { embd.map_slice_static() };
+            self.layer_norm(&mut embd, &inplace, &scale, &bias, workspace, queue_alloc)?;
+        }
+
+        for _ in 0..self.meta.nblk {}
+
+        if let Some([scale, bias]) = self.weights.post_norm(queue) {
+            let inplace = unsafe { embd.map_slice_static() };
+            self.layer_norm(&mut embd, &inplace, &scale, &bias, workspace, queue_alloc)?;
+        }
 
         if self.debug {
             println!("encode {n} x {h} x {w} image in {:?}", time.elapsed());
@@ -166,6 +185,39 @@ where
             queue_alloc,
         )
     }
+
+    fn layer_norm<Y, X, Scale, Bias, QA>(
+        &self,
+        y: &mut Tensor<Y>,
+        x: &Tensor<X>,
+        scale: &Tensor<Scale>,
+        bias: &Tensor<Bias>,
+        workspace: &mut [ByteOf<Ops::Hardware>],
+        queue_alloc: &QA,
+    ) -> Result<(), LaunchError>
+    where
+        Y: DerefMut<Target = [ByteOf<Ops::Hardware>]>,
+        X: Deref<Target = [ByteOf<Ops::Hardware>]>,
+        Scale: Deref<Target = [ByteOf<Ops::Hardware>]>,
+        Bias: Deref<Target = [ByteOf<Ops::Hardware>]>,
+        QA: QueueAlloc<Hardware = Ops::Hardware>,
+    {
+        self.layer_norm.launch(
+            &layer_norm::Args {
+                y_layout: y.layout(),
+                y_base: y.base_mut(),
+                x_layout: x.layout(),
+                x_base: x.base(),
+                scale_layout: scale.layout(),
+                scale_base: scale.base(),
+                bias_layout: bias.layout(),
+                bias_base: bias.base(),
+                epsilon: self.meta.epsilon,
+            },
+            workspace,
+            queue_alloc,
+        )
+    }
 }
 
 struct WeightDecorator<W> {
@@ -173,6 +225,7 @@ struct WeightDecorator<W> {
     patch_embd_w: Tensor<usize>,
     patch_embd_b: Tensor<usize>,
     pos_embd: Tensor<usize>,
+    norm: Tensor<usize>,
 }
 
 impl ClipMeta {
@@ -181,6 +234,7 @@ impl ClipMeta {
             patch_embd_w: self.patch_embd_w(),
             patch_embd_b: self.patch_embd_b(),
             pos_embd: self.pos_embd(),
+            norm: self.norm(),
             weights,
         }
     }
@@ -200,5 +254,25 @@ impl<W: WeightLoader> WeightDecorator<W> {
     pub fn pos_embd<'a>(&'a self, queue: &'a QueueOf<W::Hardware>) -> Tensor<W::Weight<'a>> {
         let pos_embd = self.weights.pos_embd(queue);
         self.pos_embd.clone().map(|_| pos_embd)
+    }
+
+    #[inline]
+    pub fn pre_norm<'a>(
+        &'a self,
+        queue: &'a QueueOf<W::Hardware>,
+    ) -> Option<[Tensor<W::Weight<'a>>; 2]> {
+        self.weights
+            .pre_norm(queue)
+            .map(|pair| pair.map(|w| self.norm.clone().map(|_| w)))
+    }
+
+    #[inline]
+    pub fn post_norm<'a>(
+        &'a self,
+        queue: &'a QueueOf<W::Hardware>,
+    ) -> Option<[Tensor<W::Weight<'a>>; 2]> {
+        self.weights
+            .post_norm(queue)
+            .map(|pair| pair.map(|w| self.norm.clone().map(|_| w)))
     }
 }

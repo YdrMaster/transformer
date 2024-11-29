@@ -7,6 +7,8 @@ pub struct Storage<T> {
     pub patch_embd_w: T,
     pub patch_embd_b: T,
     pub pos_embd: T,
+    pub pre_norm: Option<[T; 2]>,
+    pub post_norm: Option<[T; 2]>,
 }
 
 impl<'a> Storage<&'a [u8]> {
@@ -28,9 +30,9 @@ impl<'a> Storage<&'a [u8]> {
             projector,
             minicpmv_version: gguf.get_usize("clip.minicpmv_version").unwrap() as _,
 
+            dt     : patch_embd_w.ty,
             dt_embd: pos_embd.ty,
-            dt_mat :  patch_embd_w.ty,
-            dt_bias:  patch_embd_b.ty,
+            dt_norm: gguf.tensors["v.blk.0.ln1.weight"].ty,
 
             nblk   : gguf.get_usize("clip.vision.block_count"                 ).unwrap(),
             d_patch: gguf.get_usize("clip.vision.patch_size"                  ).unwrap(),
@@ -49,6 +51,14 @@ impl<'a> Storage<&'a [u8]> {
             patch_embd_w: patch_embd_w.data,
             patch_embd_b: patch_embd_b.data,
             pos_embd: pos_embd.data,
+            pre_norm: gguf
+                .tensors
+                .get("v.pre_ln.weight")
+                .map(|w| [w.data, gguf.tensors["v.pre_ln.bias"].data]),
+            post_norm: gguf
+                .tensors
+                .get("v.post_ln.weight")
+                .map(|w| [w.data, gguf.tensors["v.post_ln.bias"].data]),
         }
     }
 }

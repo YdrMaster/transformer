@@ -1,13 +1,16 @@
 use clip::{ClipStorage, WeightLoader};
-use operators::{add_rows, common_cpu::Cpu, conv, QueueOf, TopoNode};
+use operators::{common_cpu::Cpu, conv, QueueOf, TopoNode};
 use std::marker::PhantomData;
 
 pub struct Operators<N = Cpu>(PhantomData<N>);
 
-pub struct Weights<'w> {
-    patch_embd_w: &'w [u8],
-    patch_embd_b: &'w [u8],
-    pos_embd: &'w [u8],
+#[repr(transparent)]
+pub struct Weights<'w>(ClipStorage<&'w [u8]>);
+
+macro_rules! op {
+    ($name:ident) => {
+        operators::$name::common_cpu::Operator
+    };
 }
 
 impl<N> clip::Operators for Operators<N>
@@ -17,16 +20,13 @@ where
     type Hardware = Cpu;
     type TopoNode = Cpu;
     type Conv = conv::common_cpu::ConvIm2Col;
-    type AddRows = add_rows::common_cpu::Operator;
+    type AddRows = op!(add_rows);
+    type LayerNorm = op!(layer_norm);
 }
 
 impl<'w> Weights<'w> {
     pub fn new(model: &'w ClipStorage<&'w [u8]>) -> Self {
-        Self {
-            patch_embd_w: model.patch_embd_w,
-            patch_embd_b: model.patch_embd_b,
-            pos_embd: model.pos_embd,
-        }
+        Self(model.clone())
     }
 }
 
@@ -36,12 +36,28 @@ impl WeightLoader for Weights<'_> {
 
     #[inline]
     fn patch_embd<'a>(&'a self, _queue: &'a QueueOf<Self::Hardware>) -> [Self::Weight<'a>; 2] {
-        [self.patch_embd_w, self.patch_embd_b]
+        [self.0.patch_embd_w, self.0.patch_embd_b]
     }
 
     #[inline]
     fn pos_embd<'a>(&'a self, _queue: &'a QueueOf<Self::Hardware>) -> Self::Weight<'a> {
-        self.pos_embd
+        self.0.pos_embd
+    }
+
+    #[inline]
+    fn pre_norm<'a>(
+        &'a self,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> Option<[Self::Weight<'a>; 2]> {
+        self.0.pre_norm
+    }
+
+    #[inline]
+    fn post_norm<'a>(
+        &'a self,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> Option<[Self::Weight<'a>; 2]> {
+        self.0.post_norm
     }
 }
 

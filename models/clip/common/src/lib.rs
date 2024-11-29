@@ -22,9 +22,9 @@ pub struct ClipMeta {
     pub projector: ProjectorType,
     pub minicpmv_version: u8,
 
+    pub dt: DigitLayout,
     pub dt_embd: DigitLayout,
-    pub dt_mat: DigitLayout,
-    pub dt_bias: DigitLayout,
+    pub dt_norm: DigitLayout,
 
     pub nblk: usize,
     pub d_patch: usize,
@@ -81,16 +81,21 @@ impl ClipMeta {
 
     pub fn patch_embd_w(&self) -> Tensor<usize> {
         let &Self { d, d_patch, .. } = self;
-        Tensor::new(self.dt_mat, &[d, 3, d_patch, d_patch])
+        Tensor::new(self.dt, &[d, 3, d_patch, d_patch])
     }
 
     pub fn patch_embd_b(&self) -> Tensor<usize> {
         let &Self { d, .. } = self;
-        Tensor::new(self.dt_bias, &[d])
+        Tensor::new(self.dt, &[d])
     }
 
     pub fn pos_embd(&self) -> Tensor<usize> {
         let &Self { d, .. } = self;
         Tensor::new(self.dt_embd, &[D_POS_EMBD.pow(2), d])
+    }
+
+    pub fn norm(&self) -> Tensor<usize> {
+        let &Self { d, .. } = self;
+        Tensor::new(self.dt_norm, &[d])
     }
 }

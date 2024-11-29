@@ -45,6 +45,7 @@ pub struct WeightCache {
     cached_weight: BlkWeight,
     cached_weight_iblk: usize,
 }
+
 macro_rules! op {
     ($name:ident) => {
         operators::$name::common_cpu::Operator
