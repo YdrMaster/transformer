@@ -15,7 +15,7 @@ impl GGufModel<'_> {
     pub fn tokenizer(&self) -> Tokenizer {
         match self.tokenizer_ggml_model().unwrap() {
             "llama" => Tokenizer::bpe_from_gguf(self),
-            "fm9g8b" => Tokenizer::lpe_from_gguf(self),
+            "fm9g8b" | "gpt2" => Tokenizer::lpe_from_gguf(self),
             model => panic!("Unsupported tokenizer model: {model}"),
         }
     }
@@ -66,7 +66,7 @@ impl Tokenizer {
             let piece = piece.unwrap();
             match piece {
                 " " => space_exist = true,
-                "▁" => replace_exist = true,
+                "Ġ" => replace_exist = true,
                 _ => {}
             }
             piece
@@ -87,7 +87,7 @@ impl Tokenizer {
         Self {
             tokenize: Box::new(tokeneer),
             replace_space: match (space_exist, replace_exist) {
-                (_, true) => Some('▁'),
+                (_, true) => Some('Ġ'),
                 (true, false) => None,
                 (false, false) => panic!("Unknown user-defined space"),
             },
@@ -103,13 +103,14 @@ impl Tokenizer {
             let piece = piece.unwrap();
             match piece {
                 " " => space_exist = true,
-                "▁" => replace_exist = true,
+                "Ġ" => replace_exist = true,
                 _ => {}
             }
             piece.as_bytes()
         });
 
-        let unk = gguf.tokenizer_ggml_unknown_token_id().unwrap();
+        // let unk = gguf.tokenizer_ggml_unknown_token_id().unwrap();
+        let unk = 0; // gpt2.ggml无unk
         let bos = gguf.tokenizer_ggml_bos_token_id().unwrap();
         let eos = gguf.tokenizer_ggml_eos_token_id().unwrap();
 
@@ -122,7 +123,7 @@ impl Tokenizer {
         Self {
             tokenize: Box::new(tokeneer),
             replace_space: match (space_exist, replace_exist) {
-                (_, true) => Some('▁'),
+                (_, true) => Some('Ġ'),
                 (true, false) => None,
                 (false, false) => panic!("Unknown user-defined space"),
             },

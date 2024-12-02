@@ -1,0 +1,13 @@
+[package]
+name = "gpt2-cpu"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpt2.path = "../common"
+operators = { workspace = true, features = ["common-cpu"] }
+
+[dev-dependencies]
+test-utils.workspace = true
+gguf.workspace = true
+ndarray-layout.workspace = true

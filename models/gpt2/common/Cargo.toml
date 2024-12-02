@@ -1,0 +1,18 @@
+[package]
+name = "gpt2"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common.workspace = true
+gguf.workspace = true
+tensor.workspace = true
+operators.workspace = true
+itertools = "0.13"
+
+ggus.workspace = true
+tokeneer = "0.0"
+ndarray-layout.workspace = true
+
+[dev-dependencies]
+test-utils.workspace = true

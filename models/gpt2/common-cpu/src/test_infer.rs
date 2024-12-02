@@ -1,17 +1,15 @@
 use crate::{Operators, RandomSample, Weights};
 use gguf::GGufModel;
-use llama::{
-    ext::ggml_quants::f16, LlamaArgs, LlamaMeta, LlamaRequest, LlamaStorage, LlamaWorker, Tensor,
-};
+use gpt2::{ext::ggml_quants::f16, Gpt2Meta, Gpt2Worker, Storage, Tensor};
 use operators::{
     common_cpu::{Cpu, ThisThread},
     random_sample::{KVPair, SampleArgs},
     Blob,
 };
-use std::slice::from_raw_parts_mut;
+use std::{iter::zip, slice::from_raw_parts_mut};
 use test_utils::{Inference, TokenizerAndPrompt};
 
-type Worker<'w> = LlamaWorker<Operators, Weights<'w>>;
+type Worker<'w> = Gpt2Worker<Operators, Weights<'w>>;
 
 #[test]
 fn test_infer() {
@@ -28,52 +26,44 @@ fn test_infer() {
         return;
     };
     let gguf = GGufModel::read(model.iter().map(|s| &**s));
-
+    let model = Storage::from_gguf(&gguf);
     let TokenizerAndPrompt {
         eos,
         tokenizer,
         prompt,
     } = TokenizerAndPrompt::new(&gguf, prompt, as_user);
-
-    let model = LlamaStorage::from_gguf(&gguf);
-    println!("{:?}", model.meta);
-
     let sample_args = SampleArgs::new(temperature, top_p, top_k).expect("invalid sample args");
-    println!("{sample_args:?}");
-
-    let &LlamaMeta {
+    let &Gpt2Meta {
         dt_embd,
         nctx,
         nvoc,
-        dh,
+        d,
         ..
     } = &model.meta;
-
     let weights = Weights::new(&model, .., 1);
     let mut worker = Worker::new(&Cpu, model.meta.clone(), weights, true);
     let mut cache = model.meta.kv_cache(nctx).map(Blob::new);
-    let sin_cos = <Operators as llama::Operators>::build_sin_cos(dt_embd, nctx, dh, &ThisThread);
     let indices = RandomSample::build_indices(nvoc, &ThisThread);
-
     let sample = RandomSample::new(&Cpu);
 
     test_utils::test_infer(eos, tokenizer, &prompt, max_steps, |input, pos| {
-        let mut embd = model.meta.embd(input.len()).map(Blob::new);
+        // 词汇编码缓存
+        let mut embd = Tensor::new(dt_embd, &[1, input.len(), d]).map(Blob::new);
+        // 词汇位置缓存
         let mut logits = model.meta.logits(1).map(Blob::new);
-
-        let d = embd.get().len() / input.len();
+        let l = embd.get().len() / input.len();
         for (i, &tok) in input.iter().enumerate() {
-            embd.get_mut()[i * d..][..d]
-                .copy_from_slice(&model.token_embd[tok as usize * d..][..d]);
+            embd.get_mut()[i * l..][..l]
+                .copy_from_slice(&model.token_embd[tok as usize * l..][..l]);
         }
-
         worker
             .launch(
-                LlamaArgs {
-                    embd: embd.map_slice_mut(),
+                gpt2::args::Args {
+                    token_embd: embd.map_slice_mut(),
                     logits: logits.map_slice_mut(),
-                    sin_cos: sin_cos.map_slice(),
-                    requests: vec![LlamaRequest {
+                    idx: postion(input.len(), pos).map_slice(),
+                    idx_add: postion(input.len(), 0).map_slice(),
+                    requests: vec![gpt2::args::Request {
                         cache: cache.map_slice_mut(),
                         seq_len: input.len(),
                         out_len: 1,
@@ -106,4 +96,16 @@ fn test_infer() {
 
         pair.idx() as _
     });
+}
+
+fn postion(l: usize, pos: usize) -> Tensor<Blob> {
+    use gguf::ggml_quants::digit_layout::types as ty;
+    let mut ans = Tensor::new(ty::U32, &[1, l]).map(Blob::new);
+    let (&mut [], data, &mut []) = (unsafe { ans.get_mut().align_to_mut::<u32>() }) else {
+        panic!()
+    };
+    for i in 0..l {
+        data[i] = (pos + i) as u32;
+    }
+    ans
 }
