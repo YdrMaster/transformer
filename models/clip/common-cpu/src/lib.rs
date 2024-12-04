@@ -32,7 +32,10 @@ impl<'w> Weights<'w> {
 
 impl WeightLoader for Weights<'_> {
     type Hardware = Cpu;
-    type Weight<'s> = &'s [u8] where Self: 's;
+    type Weight<'s>
+        = &'s [u8]
+    where
+        Self: 's;
 
     #[inline]
     fn patch_embd<'a>(&'a self, _queue: &'a QueueOf<Self::Hardware>) -> [Self::Weight<'a>; 2] {
