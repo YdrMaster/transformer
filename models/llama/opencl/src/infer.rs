@@ -4,14 +4,13 @@ use llama::{
     ext::ggml_quants::f16, LlamaArgs, LlamaMeta, LlamaRequest, LlamaStorage, LlamaWorker, Tensor,
 };
 use operators::{
-    common_cpu::{Cpu, ThisThread},
+    clrt::Platform,
+    opencl::ClDevice,
     random_sample::{KVPair, SampleArgs},
-    Blob,
 };
-use std::slice::from_raw_parts_mut;
 use test_utils::{Inference, TokenizerAndPrompt};
 
-type Worker<'w> = LlamaWorker<Operators, Weights<'w>>;
+type Worker = LlamaWorker<Operators, Weights>;
 
 #[test]
 fn test_infer() {
@@ -23,6 +22,7 @@ fn test_infer() {
         top_p,
         top_k,
         max_steps,
+        ..
     }) = Inference::load()
     else {
         return;
@@ -41,30 +41,54 @@ fn test_infer() {
     let sample_args = SampleArgs::new(temperature, top_p, top_k).expect("invalid sample args");
     println!("{sample_args:?}");
 
+    let meta = &model.meta;
     let &LlamaMeta {
         dt_embd,
         nctx,
         nvoc,
         dh,
         ..
-    } = &model.meta;
+    } = meta;
 
-    let weights = Weights::new(&model, .., 1);
-    let mut worker = Worker::new(&Cpu, model.meta.clone(), weights, true);
-    let mut cache = model.meta.kv_cache(nctx).map(Blob::new);
-    let sin_cos = <Operators as llama::Operators>::build_sin_cos(dt_embd, nctx, dh, &ThisThread);
-    let indices = RandomSample::build_indices(nvoc, &ThisThread);
+    let Ok(target_device) = std::env::var("TARGET_DEVICE") else {
+        return;
+    };
+    let Some(context) = Platform::all()
+        .into_iter()
+        .flat_map(|platform| platform.devices())
+        .find(|d| d.name().contains(&target_device))
+        .map(|d| d.context())
+    else {
+        return;
+    };
+    let cl_dev = ClDevice::new(context.clone());
+    let queue = context.queue();
 
-    let sample = RandomSample::new(&Cpu);
+    let weights = Weights::new(&model, .., 1, &queue);
+    let mut worker = Worker::new(&cl_dev, model.meta.clone(), weights, true);
+    let mut cache = model
+        .meta
+        .kv_cache(nctx)
+        .map(|size| context.malloc::<u8>(size));
+    let sin_cos = <Operators as llama::Operators>::build_sin_cos(dt_embd, nctx, dh, &queue);
+    let indices = RandomSample::build_indices(nvoc, &queue);
+
+    let sample = RandomSample::new(&cl_dev);
 
     test_utils::test_infer(eos, tokenizer, &prompt, max_steps, |input, pos| {
-        let mut embd = model.meta.embd(input.len()).map(Blob::new);
-        let mut logits = model.meta.logits(1).map(Blob::new);
+        let mut embd = model
+            .meta
+            .embd(input.len())
+            .map(|size| context.malloc::<u8>(size));
+        let mut logits = model.meta.logits(1).map(|size| context.malloc::<u8>(size));
 
         let d = embd.get().len() / input.len();
         for (i, &tok) in input.iter().enumerate() {
-            embd.get_mut()[i * d..][..d]
-                .copy_from_slice(&model.token_embd[tok as usize * d..][..d]);
+            queue.memcpy_from_host(
+                &mut embd.get_mut()[i * d..][..d],
+                &model.token_embd[tok as usize * d..][..d],
+                None,
+            );
         }
 
         worker
@@ -84,26 +108,28 @@ fn test_infer() {
                     max_att_len: pos + input.len(),
                 },
                 &mut [],
-                &ThisThread,
+                &queue,
             )
             .unwrap();
 
-        let mut pair = KVPair::new(0, f16::ZERO);
-        let mut pairs = Tensor::kv_pair_vec(1, |_| unsafe {
-            from_raw_parts_mut(&mut pair as *mut _ as _, size_of_val(&pair))
-        });
+        let mut pairs = Tensor::kv_pair_vec(1, |size| context.malloc::<u8>(size));
 
         sample
-            .launch(
-                &mut pairs,
-                &logits,
-                &indices,
-                sample_args,
-                &mut [],
-                &ThisThread,
-            )
+            .launch(&mut pairs, &logits, &indices, sample_args, &mut [], &queue)
             .unwrap();
 
+        let mapped = queue.map_blob(pairs.take());
+        let mapped = &mapped[..];
+
+        let mut pair = KVPair::new(0, f16::ZERO);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                mapped.as_ptr(),
+                &mut pair as *mut _ as _,
+                size_of_val(&pair),
+            )
+        }
+
         pair.idx() as _
-    });
+    })
 }

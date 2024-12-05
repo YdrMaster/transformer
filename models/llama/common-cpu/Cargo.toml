@@ -13,3 +13,4 @@ operators = { workspace = true, features = ["common-cpu"] }
 [dev-dependencies]
 test-utils.workspace = true
 gguf.workspace = true
+regex.workspace = true

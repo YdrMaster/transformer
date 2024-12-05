@@ -287,7 +287,4 @@ impl WeightLoader for Weights<'_> {
 }
 
 #[cfg(test)]
-mod test_infer;
-
-#[cfg(test)]
-mod test_dist;
+mod infer;

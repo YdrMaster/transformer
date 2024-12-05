@@ -169,4 +169,4 @@ impl WeightLoader for Weights {
 }
 
 #[cfg(test)]
-mod test_infer;
+mod infer;

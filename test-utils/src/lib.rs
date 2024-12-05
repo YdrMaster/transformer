@@ -7,12 +7,14 @@ use std::{
     fmt,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Once,
     time::{Duration, Instant},
     vec,
 };
 
 pub struct Inference {
     pub model: Box<[Mmap]>,
+    pub devices: Option<String>,
     pub prompt: String,
     pub as_user: bool,
     pub temperature: f32,
@@ -23,6 +25,9 @@ pub struct Inference {
 
 impl Inference {
     pub fn load() -> Option<Self> {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(env_logger::init);
+
         let Some(path) = var_os("TEST_MODEL") else {
             println!("TEST_MODEL not set");
             return None;
@@ -42,6 +47,7 @@ impl Inference {
 
         Some(Self {
             model: map_files(path),
+            devices: var("DEVICES").ok(),
             prompt: var("PROMPT").unwrap_or_else(|_| String::from("Once upon a time,")),
             as_user: var("AS_USER").ok().is_some_and(|s| !s.is_empty()),
             temperature: parse("TEMPERATURE", 0.),

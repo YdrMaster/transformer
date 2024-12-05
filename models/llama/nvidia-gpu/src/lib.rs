@@ -316,4 +316,4 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
 }
 
 #[cfg(test)]
-mod test_infer;
+mod infer;

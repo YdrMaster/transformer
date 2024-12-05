@@ -6,4 +6,5 @@ authors = ["YdrMaster <ydrml@hotmail.com>"]
 
 [dependencies]
 gguf.workspace = true
+env_logger.workspace = true
 cli-table = "0.4.9"

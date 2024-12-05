@@ -7,6 +7,7 @@ use operators::{
     random_sample::{KVPair, SampleArgs},
     Blob,
 };
+use regex::Regex;
 use std::{
     iter::zip,
     ptr::copy_nonoverlapping,
@@ -22,9 +23,10 @@ use test_utils::{Inference, TokenizerAndPrompt};
 type Worker<'w> = LlamaWorker<Operators<InprocNode<usize>, AllReduce>, Weights<'w>>;
 
 #[test]
-fn test_dist() {
+fn test_infer() {
     let Some(Inference {
         model,
+        devices,
         prompt,
         as_user,
         temperature,
@@ -49,7 +51,17 @@ fn test_dist() {
     let sample_args = SampleArgs::new(temperature, top_p, top_k).expect("invalid sample args");
     println!("{sample_args:?}");
 
-    let lens = [1; 4];
+    let lens = match devices {
+        Some(devices) => {
+            let regex = Regex::new(r"\d+").unwrap();
+            regex
+                .find_iter(&devices)
+                .map(|c| c.as_str().parse::<usize>().unwrap())
+                .collect::<Vec<_>>()
+        }
+        None => vec![1],
+    };
+    println!("distribution: {lens:?}");
     let count = lens.iter().sum();
     let (seeds, senders) = WorkerSeed::new(lens.len());
     thread::scope(|s| {
