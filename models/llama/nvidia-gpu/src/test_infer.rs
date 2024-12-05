@@ -8,7 +8,7 @@ use operators::{
     nvidia_gpu::{Config, Gpu},
     random_sample::{KVPair, SampleArgs},
 };
-use std::{slice::from_raw_parts_mut, thread, usize};
+use std::{slice::from_raw_parts_mut, time::Instant, usize};
 use test_utils::{load_roll_cache_size, Inference, TokenizerAndPrompt};
 
 type Worker<'w> = LlamaWorker<Operators, Weights<'w>>;
@@ -60,73 +60,66 @@ fn test_infer() {
         ..
     } = meta;
 
-    thread::scope(|s| {
-        let sample = s.spawn(move || {
-            let mut sample = RandomSample::new(gpu);
-            sample.scheme(dt_embd, nvoc).unwrap();
-            sample
-        });
-        gpu.apply(|ctx| {
-            let stream = ctx.stream();
+    gpu.apply(|ctx| {
+        let stream = ctx.stream();
 
-            let token_embd = stream.from_host(model.token_embd);
-            let weights = Weights::new(&model, .., 1, roll_cache_size, ctx);
-            let mut worker = Worker::new(&gpu, meta.clone(), weights, true);
-            let mut cache = meta.kv_cache(nctx).map(|size| stream.malloc::<u8>(size));
-            let sin_cos =
-                <Operators as llama::Operators>::build_sin_cos(dt_embd, nctx, dh, &stream);
-            let indices = RandomSample::build_indices(nvoc, &stream);
+        let time = Instant::now();
+        let token_embd = stream.from_host(model.token_embd);
+        let weights = Weights::new(&model, .., 1, roll_cache_size, ctx);
+        println!("load weights: {:?}", time.elapsed());
 
-            let sample = sample.join().unwrap();
-            test_utils::test_infer(eos, tokenizer, &prompt, max_steps, |input, pos| {
-                let mut embd = meta.embd(input.len()).map(|len| stream.malloc::<u8>(len));
-                let mut logits = meta.logits(1).map(|len| stream.malloc::<u8>(len));
+        let mut worker = Worker::new(&gpu, meta.clone(), weights, true);
+        let mut cache = meta.kv_cache(nctx).map(|size| stream.malloc::<u8>(size));
+        let sin_cos = <Operators as llama::Operators>::build_sin_cos(dt_embd, nctx, dh, &stream);
+        let indices = RandomSample::build_indices(nvoc, &stream);
+        let sample = RandomSample::new(gpu);
 
-                let d = embd.get().len() / input.len();
-                for (i, &tok) in input.iter().enumerate() {
-                    stream.memcpy_d2d(
-                        &mut embd.get_mut()[i * d..][..d],
-                        &token_embd[tok as usize * d..][..d],
-                    )
-                }
+        test_utils::test_infer(eos, tokenizer, &prompt, max_steps, |input, pos| {
+            let mut embd = meta.embd(input.len()).map(|len| stream.malloc::<u8>(len));
+            let mut logits = meta.logits(1).map(|len| stream.malloc::<u8>(len));
 
-                worker
-                    .launch(
-                        LlamaArgs {
-                            embd: embd.map_slice_mut(),
-                            logits: logits.map_slice_mut(),
-                            sin_cos: sin_cos.map_slice(),
-                            requests: vec![LlamaRequest {
-                                cache: cache.map_slice_mut(),
-                                seq_len: input.len(),
-                                out_len: 1,
-                                pos,
-                            }],
-                            num_tokens: input.len(),
-                            max_seq_len: input.len(),
-                            max_att_len: pos + input.len(),
-                        },
-                        &mut [],
-                        &stream,
-                    )
-                    .unwrap();
+            let d = embd.get().len() / input.len();
+            for (i, &tok) in input.iter().enumerate() {
+                stream.memcpy_d2d(
+                    &mut embd.get_mut()[i * d..][..d],
+                    &token_embd[tok as usize * d..][..d],
+                )
+            }
 
-                let mut pairs = Tensor::kv_pair_vec(1, |size| stream.malloc::<u8>(size));
-
-                sample
-                    .launch(&mut pairs, &logits, &indices, sample_args, &mut [], &stream)
-                    .unwrap();
-
-                let mut pair = KVPair::new(0, f16::ZERO);
-                memcpy_d2h(
-                    unsafe {
-                        from_raw_parts_mut(&mut pair as *mut _ as *mut u8, size_of_val(&pair))
+            worker
+                .launch(
+                    LlamaArgs {
+                        embd: embd.map_slice_mut(),
+                        logits: logits.map_slice_mut(),
+                        sin_cos: sin_cos.map_slice(),
+                        requests: vec![LlamaRequest {
+                            cache: cache.map_slice_mut(),
+                            seq_len: input.len(),
+                            out_len: 1,
+                            pos,
+                        }],
+                        num_tokens: input.len(),
+                        max_seq_len: input.len(),
+                        max_att_len: pos + input.len(),
                     },
-                    pairs.get(),
-                );
+                    &mut [],
+                    &stream,
+                )
+                .unwrap();
 
-                pair.idx() as _
-            });
+            let mut pairs = Tensor::kv_pair_vec(1, |size| stream.malloc::<u8>(size));
+
+            sample
+                .launch(&mut pairs, &logits, &indices, sample_args, &mut [], &stream)
+                .unwrap();
+
+            let mut pair = KVPair::new(0, f16::ZERO);
+            memcpy_d2h(
+                unsafe { from_raw_parts_mut(&mut pair as *mut _ as *mut u8, size_of_val(&pair)) },
+                pairs.get(),
+            );
+
+            pair.idx() as _
         });
     });
 }

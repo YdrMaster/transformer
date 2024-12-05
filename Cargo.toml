@@ -28,7 +28,7 @@ itertools = "0.13"
 build-script-cfg = "0.0"
 
 ndarray-layout = { git = "https://github.com/YdrMaster/ndarray-layout", rev = "f1fdd24" }
-operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "8c2227a", default-features = false }
+operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "923949f", default-features = false }
 
 search-cl-tools = { git = "https://github.com/InfiniTensor/clrt", rev = "6846d52" }
 search-infini-tools = { git = "https://github.com/InfiniTensor/infini-rt", rev = "136c30b" }
