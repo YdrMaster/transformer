@@ -28,9 +28,6 @@ fn test_infer() {
     else {
         return;
     };
-
-    let roll_cache_size = load_roll_cache_size();
-    println!("roll_cache_size: {roll_cache_size}");
     let gguf = GGufModel::read(model.iter().map(|s| &**s));
 
     let TokenizerAndPrompt {
@@ -44,6 +41,9 @@ fn test_infer() {
 
     let sample_args = SampleArgs::new(temperature, top_p, top_k).expect("invalid sample args");
     println!("{sample_args:?}");
+
+    let roll_cache_size = load_roll_cache_size();
+    println!("roll_cache_size: {roll_cache_size}");
 
     let gpu = match cuda::init() {
         Ok(()) => Device::new(0),

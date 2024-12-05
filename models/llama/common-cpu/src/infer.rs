@@ -3,7 +3,7 @@ use gguf::GGufModel;
 use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
 use operators::{
     all_reduce::common_cpu::Operator as AllReduce,
-    common_cpu::{Cpu, InprocNode, ThisThread},
+    common_cpu::{InprocNode, ThisThread},
     random_sample::{KVPair, SampleArgs},
     Blob,
 };
@@ -12,10 +12,7 @@ use std::{
     iter::zip,
     ptr::copy_nonoverlapping,
     slice::from_raw_parts_mut,
-    sync::{
-        mpsc::{Receiver, Sender},
-        Arc, Barrier,
-    },
+    sync::mpsc::{Receiver, Sender},
     thread,
 };
 use test_utils::{Inference, TokenizerAndPrompt};
@@ -52,13 +49,11 @@ fn test_infer() {
     println!("{sample_args:?}");
 
     let lens = match devices {
-        Some(devices) => {
-            let regex = Regex::new(r"\d+").unwrap();
-            regex
-                .find_iter(&devices)
-                .map(|c| c.as_str().parse::<usize>().unwrap())
-                .collect::<Vec<_>>()
-        }
+        Some(devices) => Regex::new(r"\d+")
+            .unwrap()
+            .find_iter(&devices)
+            .map(|c| c.as_str().parse::<usize>().unwrap())
+            .collect::<Vec<_>>(),
         None => vec![1],
     };
     println!("distribution: {lens:?}");
@@ -87,25 +82,27 @@ fn test_infer() {
                         meta.dh,
                         &ThisThread,
                     );
+
+                    let sample = RandomSample::new(&node);
+                    let indices = RandomSample::build_indices(model.meta.nvoc, &ThisThread);
+                    let mut pair = KVPair::new(0, f16::ZERO);
+                    let mut pairs = Tensor::kv_pair_vec(1, |_| unsafe {
+                        from_raw_parts_mut(&mut pair as *mut _ as *mut u8, size_of_val(&pair))
+                    });
+
                     for task in tasks {
                         let Task {
                             nt,
                             pos,
                             embd,
-                            logits,
-                            barrier,
+                            next,
                         } = task;
                         let mut embd = meta.embd(nt).map(|size| {
                             let mut blob = Blob::new(size);
                             unsafe { copy_nonoverlapping(embd, blob.as_mut_ptr(), size) };
                             blob
                         });
-                        let mut logits = if i == 0 {
-                            meta.logits(1)
-                                .map(|size| unsafe { from_raw_parts_mut(logits, size) })
-                        } else {
-                            meta.logits(0).map(|_| &mut [][..])
-                        };
+                        let mut logits = meta.logits(if i == 0 { 1 } else { 0 }).map(Blob::new);
                         worker
                             .launch(
                                 llama::LlamaArgs {
@@ -126,17 +123,27 @@ fn test_infer() {
                                 &ThisThread,
                             )
                             .unwrap();
-                        barrier.wait();
+                        if i == 0 {
+                            sample
+                                .launch(
+                                    &mut pairs,
+                                    &logits,
+                                    &indices,
+                                    sample_args,
+                                    &mut [],
+                                    &ThisThread,
+                                )
+                                .unwrap();
+                            next.send(pair.idx() as _).unwrap()
+                        }
                     }
                 }))
             })
             .collect::<Vec<_>>();
 
-        let sample = RandomSample::new(&Cpu);
-        let indices = RandomSample::build_indices(model.meta.nvoc, &ThisThread);
+        let (next, next_recv) = std::sync::mpsc::channel();
         test_utils::test_infer(eos, tokenizer, &prompt, max_steps, |input, pos| {
             let mut embd = model.meta.embd(input.len()).map(Blob::new);
-            let mut logits = model.meta.logits(1).map(Blob::new);
 
             let d = embd.get().len() / input.len();
             for (i, &tok) in input.iter().enumerate() {
@@ -145,40 +152,20 @@ fn test_infer() {
             }
             let embd = embd.take();
 
-            let barrier = Arc::new(Barrier::new(senders.len() + 1));
             for sender in &senders {
                 sender
                     .send(Task {
                         nt: input.len(),
                         pos,
                         embd: embd.as_ptr(),
-                        logits: logits.get_mut().as_mut_ptr(),
-                        barrier: barrier.clone(),
+                        next: next.clone(),
                     })
                     .unwrap();
             }
-            barrier.wait();
-
-            let mut pair = KVPair::new(0, f16::ZERO);
-            let mut pairs = Tensor::kv_pair_vec(1, |_| unsafe {
-                from_raw_parts_mut(&mut pair as *mut _ as _, size_of_val(&pair))
-            });
-
-            sample
-                .launch(
-                    &mut pairs,
-                    &logits,
-                    &indices,
-                    sample_args,
-                    &mut [],
-                    &ThisThread,
-                )
-                .unwrap();
-
-            pair.idx() as _
+            next_recv.recv().unwrap()
         });
 
-        drop(senders);
+        drop(senders)
     })
 }
 
@@ -186,8 +173,7 @@ struct Task {
     nt: usize,
     pos: usize,
     embd: *const u8,
-    logits: *mut u8,
-    barrier: Arc<Barrier>,
+    next: Sender<u32>,
 }
 
 unsafe impl Send for Task {}

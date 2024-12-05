@@ -317,3 +317,6 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
 
 #[cfg(test)]
 mod infer;
+
+#[cfg(all(test, nccl_detected))]
+mod nccl_parallel;

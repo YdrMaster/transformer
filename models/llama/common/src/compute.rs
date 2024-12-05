@@ -264,6 +264,9 @@ where
                 self.all_reduce(&mut x, workspace, queue_alloc)?;
             }
         }
+        if logits.shape()[0] == 0 {
+            return Ok(());
+        }
 
         // 集中要采样的 token
         // NOTICE: 输入之前将请求按 seq len 升序排列可降低移动开销
