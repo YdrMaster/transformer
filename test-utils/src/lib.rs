@@ -1,3 +1,9 @@
+#[cfg(feature = "llama")]
+mod llama;
+
+#[cfg(feature = "llama")]
+pub use llama::{test_infer_paralle, Task, WorkerSeed};
+
 use gguf::{
     ext::{utok, Mmap},
     map_files, GGufMetaMapExt, GGufModel, Message, Tokenizer,
@@ -5,13 +11,9 @@ use gguf::{
 use std::{
     env::{var, var_os},
     fmt,
-    iter::zip,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{
-        mpsc::{self, Sender},
-        Once,
-    },
+    sync::Once,
     time::{Duration, Instant},
 };
 
@@ -26,13 +28,27 @@ pub struct Inference {
     pub max_steps: usize,
 }
 
+mod env {
+    pub const TEST_MODEL: &str = "TEST_MODEL";
+    pub const TEST_IMAGE: &str = "TEST_IMAGE";
+    pub const DEVICES: &str = "DEVICES";
+    pub const PROMPT: &str = "PROMPT";
+    pub const AS_USER: &str = "AS_USER";
+    pub const TEMPERATURE: &str = "TEMPERATURE";
+    pub const TOP_P: &str = "TOP_P";
+    pub const TOP_K: &str = "TOP_K";
+    pub const MAX_STEPS: &str = "MAX_STEPS";
+    pub const ROLL_CACHE_SIZE: &str = "ROLL_CACHE_SIZE";
+}
+use env::*;
+
 impl Inference {
     pub fn load() -> Option<Self> {
         static ONCE: Once = Once::new();
         ONCE.call_once(env_logger::init);
 
-        let Some(path) = var_os("TEST_MODEL") else {
-            println!("TEST_MODEL not set");
+        let Some(path) = var_os(TEST_MODEL) else {
+            println!("{TEST_MODEL} not set");
             return None;
         };
         let path = Path::new(&path);
@@ -50,26 +66,26 @@ impl Inference {
 
         Some(Self {
             model: map_files(path),
-            devices: var("DEVICES").ok(),
-            prompt: var("PROMPT").unwrap_or_else(|_| String::from("Once upon a time,")),
-            as_user: var("AS_USER").ok().is_some_and(|s| !s.is_empty()),
-            temperature: parse("TEMPERATURE", 0.),
-            top_p: parse("TOP_P", 1.),
-            top_k: parse("TOP_K", usize::MAX),
-            max_steps: parse("MAX_STEPS", usize::MAX),
+            devices: var(DEVICES).ok(),
+            prompt: var(PROMPT).unwrap_or_else(|_| String::from("Once upon a time,")),
+            as_user: var(AS_USER).ok().is_some_and(|s| !s.is_empty()),
+            temperature: parse(TEMPERATURE, 0.),
+            top_p: parse(TOP_P, 1.),
+            top_k: parse(TOP_K, usize::MAX),
+            max_steps: parse(MAX_STEPS, usize::MAX),
         })
     }
 }
 
 pub fn load_roll_cache_size() -> usize {
-    var("ROLL_CACHE_SIZE")
+    var(ROLL_CACHE_SIZE)
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(usize::MAX)
 }
 
 pub fn image() -> Option<PathBuf> {
-    var_os("TEST_IMAGE").map(PathBuf::from)
+    var_os(TEST_IMAGE).map(PathBuf::from)
 }
 
 pub struct TokenizerAndPrompt {
@@ -177,73 +193,5 @@ pub fn test_infer(
             cell(format!("{:.3?}", time)),
             cell(format!("{:.3?}", time.div_f64(n as _))),
         ]
-    }
-}
-
-#[cfg(feature = "llama")]
-pub fn test_infer_paralle<'w>(
-    model: &llama::LlamaStorage<&'w [u8]>,
-    senders: Box<[mpsc::Sender<Task>]>,
-    eos: utok,
-    tokenizer: Tokenizer,
-    prompt: &str,
-    max_steps: usize,
-) {
-    use tensor::Blob;
-
-    let (next, next_recv) = mpsc::channel();
-    test_infer(eos, tokenizer, prompt, max_steps, |input, pos| {
-        let mut embd = model.meta.embd(input.len()).map(Blob::new).take();
-
-        let d = embd.len() / input.len();
-        for (i, &tok) in input.iter().enumerate() {
-            embd[i * d..][..d].copy_from_slice(&model.token_embd[tok as usize * d..][..d]);
-        }
-
-        for sender in &senders {
-            sender
-                .send(Task {
-                    nt: input.len(),
-                    pos,
-                    embd: embd.as_ptr(),
-                    next: next.clone(),
-                })
-                .unwrap()
-        }
-        next_recv.recv().unwrap()
-    });
-}
-
-pub struct Task {
-    pub nt: usize,
-    pub pos: usize,
-    pub embd: *const u8,
-    pub next: mpsc::Sender<utok>,
-}
-
-unsafe impl Send for Task {}
-
-pub struct WorkerSeed<N> {
-    pub tasks: mpsc::Receiver<Task>,
-    pub node: N,
-}
-
-impl<N> WorkerSeed<N> {
-    pub fn new(nodes: Vec<N>) -> (Vec<Self>, Vec<Sender<Task>>) {
-        let n = nodes.len();
-
-        let mut tasks = Vec::with_capacity(n);
-        let mut senders = Vec::with_capacity(n);
-        for _ in 0..n {
-            let (sender, receiver) = std::sync::mpsc::channel();
-            tasks.push(receiver);
-            senders.push(sender);
-        }
-        (
-            zip(nodes, tasks)
-                .map(|(node, tasks)| Self { node, tasks })
-                .collect(),
-            senders,
-        )
     }
 }
