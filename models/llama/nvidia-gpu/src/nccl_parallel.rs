@@ -7,16 +7,15 @@ use operators::{
     nccl::CommunicatorGroup,
     nvidia_gpu::NcclNode,
     random_sample::{KVPair, SampleArgs},
-    Blob, TopoNode,
+    TopoNode,
 };
 use regex::Regex;
 use std::{
     iter::zip,
     slice::{from_raw_parts, from_raw_parts_mut},
-    sync::mpsc::{Receiver, Sender},
-    thread, usize,
+    thread,
 };
-use test_utils::{Inference, TokenizerAndPrompt};
+use test_utils::{test_infer_paralle, Inference, Task, TokenizerAndPrompt, WorkerSeed};
 
 type Worker<'w> = LlamaWorker<Operators<NcclNode, AllReduce>, Weights<'w>>;
 
@@ -49,21 +48,27 @@ fn test_infer() {
     let sample_args = SampleArgs::new(temperature, top_p, top_k).expect("invalid sample args");
     println!("{sample_args:?}");
 
-    let devices = match devices {
-        Some(devices) => Regex::new(r"\d+")
-            .unwrap()
-            .find_iter(&devices)
-            .map(|c| c.as_str().parse().unwrap())
-            .collect::<Vec<_>>(),
-        None => vec![0],
-    };
-    println!("distribution: {devices:?}");
-
+    let devices = devices
+        .map(|devices| {
+            Regex::new(r"\d+")
+                .unwrap()
+                .find_iter(&devices)
+                .map(|c| c.as_str().parse().unwrap())
+                .collect()
+        })
+        .unwrap_or_else(|| vec![1]);
     let lens = vec![1; devices.len()];
     let count = devices.len();
+    println!("distribution: {devices:?}");
 
     let (seeds, senders) = match cuda::init() {
-        Ok(()) => WorkerSeed::new(&devices),
+        Ok(()) => WorkerSeed::new(
+            CommunicatorGroup::new(&devices)
+                .into_vec()
+                .into_iter()
+                .map(|comm| NcclNode::new(comm, Default::default()))
+                .collect(),
+        ),
         Err(NoDevice) => return,
     };
     thread::scope(|s| {
@@ -77,7 +82,6 @@ fn test_infer() {
                 meta.distribute(range.clone(), count);
 
                 let model = &model;
-
                 Some(s.spawn(move || {
                     let WorkerSeed { node, tasks } = seed;
                     node.processor().apply(|ctx| {
@@ -163,68 +167,7 @@ fn test_infer() {
             })
             .collect::<Vec<_>>();
 
-        let (next, next_recv) = std::sync::mpsc::channel();
-        test_utils::test_infer(eos, tokenizer, &prompt, max_steps, |input, pos| {
-            let mut embd = model.meta.embd(input.len()).map(Blob::new);
-
-            let d = embd.get().len() / input.len();
-            for (i, &tok) in input.iter().enumerate() {
-                embd.get_mut()[i * d..][..d]
-                    .copy_from_slice(&model.token_embd[tok as usize * d..][..d]);
-            }
-            let embd = embd.take();
-
-            for sender in &senders {
-                sender
-                    .send(Task {
-                        nt: input.len(),
-                        pos,
-                        embd: embd.as_ptr(),
-                        next: next.clone(),
-                    })
-                    .unwrap();
-            }
-            next_recv.recv().unwrap()
-        });
-
-        drop(senders)
+        let senders = senders.into_boxed_slice();
+        test_infer_paralle(&model, senders, eos, tokenizer, &prompt, max_steps)
     })
-}
-
-struct Task {
-    nt: usize,
-    pos: usize,
-    embd: *const u8,
-    next: Sender<u32>,
-}
-
-unsafe impl Send for Task {}
-
-struct WorkerSeed {
-    tasks: Receiver<Task>,
-    node: NcclNode,
-}
-
-impl WorkerSeed {
-    fn new(devices: &[i32]) -> (Vec<Self>, Vec<Sender<Task>>) {
-        let nodes = CommunicatorGroup::new(devices)
-            .into_vec()
-            .into_iter()
-            .map(|comm| NcclNode::new(comm, Default::default()))
-            .collect::<Vec<_>>();
-        let n = nodes.len();
-        let mut tasks = Vec::with_capacity(n);
-        let mut senders = Vec::with_capacity(n);
-        for _ in 0..n {
-            let (sender, receiver) = std::sync::mpsc::channel();
-            tasks.push(receiver);
-            senders.push(sender);
-        }
-        (
-            zip(nodes, tasks)
-                .map(|(node, tasks)| Self { node, tasks })
-                .collect(),
-            senders,
-        )
-    }
 }

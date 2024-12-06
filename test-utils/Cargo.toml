@@ -4,7 +4,12 @@ version = "0.0.0"
 edition = "2021"
 authors = ["YdrMaster <ydrml@hotmail.com>"]
 
+[features]
+default = ["llama"]
+
 [dependencies]
+llama = { path = "../models/llama/common", optional = true }
 gguf.workspace = true
+tensor.workspace = true
 env_logger.workspace = true
 cli-table = "0.4.9"

@@ -8,14 +8,8 @@ use operators::{
     Blob,
 };
 use regex::Regex;
-use std::{
-    iter::zip,
-    ptr::copy_nonoverlapping,
-    slice::from_raw_parts_mut,
-    sync::mpsc::{Receiver, Sender},
-    thread,
-};
-use test_utils::{Inference, TokenizerAndPrompt};
+use std::{iter::zip, ptr::copy_nonoverlapping, slice::from_raw_parts_mut, thread};
+use test_utils::{test_infer_paralle, Inference, Task, TokenizerAndPrompt, WorkerSeed};
 
 type Worker<'w> = LlamaWorker<Operators<InprocNode<usize>, AllReduce>, Weights<'w>>;
 
@@ -48,17 +42,19 @@ fn test_infer() {
     let sample_args = SampleArgs::new(temperature, top_p, top_k).expect("invalid sample args");
     println!("{sample_args:?}");
 
-    let lens = match devices {
-        Some(devices) => Regex::new(r"\d+")
-            .unwrap()
-            .find_iter(&devices)
-            .map(|c| c.as_str().parse::<usize>().unwrap())
-            .collect::<Vec<_>>(),
-        None => vec![1],
-    };
-    println!("distribution: {lens:?}");
+    let lens = devices
+        .map(|devices| {
+            Regex::new(r"\d+")
+                .unwrap()
+                .find_iter(&devices)
+                .map(|c| c.as_str().parse().unwrap())
+                .collect()
+        })
+        .unwrap_or_else(|| vec![1]);
     let count = lens.iter().sum();
-    let (seeds, senders) = WorkerSeed::new(lens.len());
+    println!("distribution: {lens:?}");
+
+    let (seeds, senders) = WorkerSeed::new(InprocNode::new(lens.len()));
     thread::scope(|s| {
         let _workers = zip(lens, seeds)
             .enumerate()
@@ -70,7 +66,6 @@ fn test_infer() {
                 meta.distribute(range.clone(), count);
 
                 let model = &model;
-
                 Some(s.spawn(move || {
                     let WorkerSeed { node, tasks } = seed;
                     let weights = Weights::new(model, range, count);
@@ -141,63 +136,7 @@ fn test_infer() {
             })
             .collect::<Vec<_>>();
 
-        let (next, next_recv) = std::sync::mpsc::channel();
-        test_utils::test_infer(eos, tokenizer, &prompt, max_steps, |input, pos| {
-            let mut embd = model.meta.embd(input.len()).map(Blob::new);
-
-            let d = embd.get().len() / input.len();
-            for (i, &tok) in input.iter().enumerate() {
-                embd.get_mut()[i * d..][..d]
-                    .copy_from_slice(&model.token_embd[tok as usize * d..][..d]);
-            }
-            let embd = embd.take();
-
-            for sender in &senders {
-                sender
-                    .send(Task {
-                        nt: input.len(),
-                        pos,
-                        embd: embd.as_ptr(),
-                        next: next.clone(),
-                    })
-                    .unwrap();
-            }
-            next_recv.recv().unwrap()
-        });
-
-        drop(senders)
+        let senders = senders.into_boxed_slice();
+        test_infer_paralle(&model, senders, eos, tokenizer, &prompt, max_steps)
     })
-}
-
-struct Task {
-    nt: usize,
-    pos: usize,
-    embd: *const u8,
-    next: Sender<u32>,
-}
-
-unsafe impl Send for Task {}
-
-struct WorkerSeed {
-    tasks: Receiver<Task>,
-    node: InprocNode<usize>,
-}
-
-impl WorkerSeed {
-    fn new(n: usize) -> (Vec<Self>, Vec<Sender<Task>>) {
-        let mut tasks = Vec::with_capacity(n);
-        let mut senders = Vec::with_capacity(n);
-        let nodes = InprocNode::new(n);
-        for _ in 0..n {
-            let (sender, receiver) = std::sync::mpsc::channel();
-            tasks.push(receiver);
-            senders.push(sender);
-        }
-        (
-            zip(nodes, tasks)
-                .map(|(node, tasks)| Self { node, tasks })
-                .collect(),
-            senders,
-        )
-    }
 }

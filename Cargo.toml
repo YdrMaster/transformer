@@ -21,7 +21,7 @@ common.path = "common"
 gguf.path = "gguf"
 tensor.path = "tensor"
 causal-lm.path = "causal-lm"
-test-utils.path = "test-utils"
+test-utils = { path = "test-utils", default-features = false }
 
 ggus = "0.3"
 itertools = "0.13"
