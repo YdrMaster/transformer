@@ -56,7 +56,7 @@ fn test_infer() {
                 .map(|c| c.as_str().parse().unwrap())
                 .collect()
         })
-        .unwrap_or_else(|| vec![1]);
+        .unwrap_or_else(|| vec![0]);
     let lens = vec![1; devices.len()];
     let count = devices.len();
     println!("distribution: {devices:?}");
