@@ -1,4 +1,4 @@
-#![cfg(src_detected)]
+#![cfg(detected)]
 
 use llama::{BlkWeight, Contiguous, LlamaBlkStorage, LlamaStorage, Tensor, WeightLoader};
 use operators::{

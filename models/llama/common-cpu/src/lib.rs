@@ -12,15 +12,11 @@ use operators::{
     Blob, ByteOf, QueueOf, TopoNode,
 };
 use std::{
-    cell::Ref,
-    ops::Range,
-    slice::{from_raw_parts, from_raw_parts_mut},
-};
-use std::{
-    cell::RefCell,
+    cell::{Ref, RefCell},
     marker::PhantomData,
     mem::size_of,
-    ops::{Deref, RangeBounds},
+    ops::{Deref, Range, RangeBounds},
+    slice::{from_raw_parts, from_raw_parts_mut},
 };
 
 pub struct Operators<N = Cpu, R = NonAllReduce<Cpu, Rearrange>>(PhantomData<(N, R)>);

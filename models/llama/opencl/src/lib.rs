@@ -1,4 +1,4 @@
-#![cfg(hw_detected)]
+#![cfg(detected)]
 
 use llama::{BlkWeight, Contiguous, LlamaStorage, Tensor, WeightLoader};
 use operators::{
