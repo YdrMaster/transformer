@@ -24,14 +24,13 @@ causal-lm.path = "causal-lm"
 test-utils = { path = "test-utils", default-features = false }
 
 ggus = "0.3"
+ndarray-layout = "0.0"
 itertools = "0.13"
 regex = "1.11"
 env_logger = "0.11"
 build-script-cfg = "0.0"
 
-ndarray-layout = { git = "https://github.com/YdrMaster/ndarray-layout", rev = "f1fdd24" }
 operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "b9e6fdd", default-features = false }
-
 search-cl-tools = { git = "https://github.com/InfiniTensor/clrt", rev = "6846d52" }
 search-infini-tools = { git = "https://github.com/InfiniTensor/infini-rt", rev = "136c30b" }
 search-cuda-tools = { git = "https://github.com/YdrMaster/cuda-driver", rev = "e2ec203" }
