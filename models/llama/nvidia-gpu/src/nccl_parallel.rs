@@ -74,7 +74,7 @@ fn test_infer() {
     thread::scope(|s| {
         let _workers = zip(lens, seeds)
             .enumerate()
-            .scan(0, |start, (i, (len, seed))| {
+            .scan(0, |start, (id, (len, seed))| {
                 let range = *start..*start + len;
                 *start = range.end;
 
@@ -87,7 +87,7 @@ fn test_infer() {
                     node.processor().apply(|ctx| {
                         let stream = ctx.stream();
                         let weights = Weights::new(model, range, count, usize::MAX, ctx);
-                        let mut worker = Worker::new(&node, meta.clone(), weights, i == 0);
+                        let mut worker = Worker::new(id, &node, meta.clone(), weights, id == 0);
                         let mut cache = meta
                             .kv_cache(meta.nctx)
                             .map(|size| stream.malloc::<u8>(size));
@@ -114,7 +114,7 @@ fn test_infer() {
                                 stream.from_host(unsafe { from_raw_parts(embd, size) })
                             });
                             let mut logits = meta
-                                .logits(if i == 0 { 1 } else { 0 })
+                                .logits(if id == 0 { 1 } else { 0 })
                                 .map(|size| stream.malloc::<u8>(size));
                             worker
                                 .launch(
@@ -125,7 +125,7 @@ fn test_infer() {
                                         requests: vec![LlamaRequest {
                                             cache: cache.map_slice_mut(),
                                             seq_len: nt,
-                                            out_len: if i == 0 { 1 } else { 0 },
+                                            out_len: if id == 0 { 1 } else { 0 },
                                             pos,
                                         }],
                                         num_tokens: nt,
@@ -136,7 +136,7 @@ fn test_infer() {
                                     &stream,
                                 )
                                 .unwrap();
-                            if i == 0 {
+                            if id == 0 {
                                 sample
                                     .launch(
                                         &mut pairs,

@@ -72,6 +72,8 @@ pub trait WeightLoader {
 }
 
 pub struct LlamaWorker<Ops: Operators, W> {
+    #[allow(dead_code)]
+    id: usize,
     meta: LlamaMeta,
     weights: WeightDecorator<W>,
     rms_norm: Ops::RmsNorm,
@@ -82,13 +84,19 @@ pub struct LlamaWorker<Ops: Operators, W> {
     rearrange: Ops::Rearrange,
     all_reduce: Ops::AllReduce,
     residual: bool,
-    pub debug: bool,
 }
 
 impl<Ops: Operators, W> LlamaWorker<Ops, W> {
-    pub fn new(node: &Ops::TopoNode, meta: LlamaMeta, weights: W, residual: bool) -> Self {
+    pub fn new(
+        id: usize,
+        node: &Ops::TopoNode,
+        meta: LlamaMeta,
+        weights: W,
+        residual: bool,
+    ) -> Self {
         let processor = node.processor();
         Self {
+            id,
             weights: meta.decorator(weights),
             meta,
             rms_norm: Ops::RmsNorm::new(processor),
@@ -99,7 +107,6 @@ impl<Ops: Operators, W> LlamaWorker<Ops, W> {
             rearrange: Ops::Rearrange::new(processor),
             all_reduce: Ops::AllReduce::new(node),
             residual,
-            debug: true,
         }
     }
 

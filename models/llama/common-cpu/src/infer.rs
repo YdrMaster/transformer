@@ -58,7 +58,7 @@ fn test_infer() {
     thread::scope(|s| {
         let _workers = zip(lens, seeds)
             .enumerate()
-            .scan(0, |start, (i, (len, seed))| {
+            .scan(0, |start, (id, (len, seed))| {
                 let range = *start..*start + len;
                 *start = range.end;
 
@@ -69,7 +69,7 @@ fn test_infer() {
                 Some(s.spawn(move || {
                     let WorkerSeed { node, tasks } = seed;
                     let weights = Weights::new(model, range, count);
-                    let mut worker = Worker::new(&node, meta.clone(), weights, i == 0);
+                    let mut worker = Worker::new(id, &node, meta.clone(), weights, id == 0);
                     let mut cache = meta.kv_cache(meta.nctx).map(Blob::new);
                     let sin_cos = <Operators as llama::Operators>::build_sin_cos(
                         meta.dt_embd,
@@ -97,7 +97,7 @@ fn test_infer() {
                             unsafe { copy_nonoverlapping(embd, blob.as_mut_ptr(), size) };
                             blob
                         });
-                        let mut logits = meta.logits(if i == 0 { 1 } else { 0 }).map(Blob::new);
+                        let mut logits = meta.logits(if id == 0 { 1 } else { 0 }).map(Blob::new);
                         worker
                             .launch(
                                 llama::LlamaArgs {
@@ -107,7 +107,7 @@ fn test_infer() {
                                     requests: vec![LlamaRequest {
                                         cache: cache.map_slice_mut(),
                                         seq_len: nt,
-                                        out_len: if i == 0 { 1 } else { 0 },
+                                        out_len: if id == 0 { 1 } else { 0 },
                                         pos,
                                     }],
                                     num_tokens: nt,
@@ -118,7 +118,7 @@ fn test_infer() {
                                 &ThisThread,
                             )
                             .unwrap();
-                        if i == 0 {
+                        if id == 0 {
                             sample
                                 .launch(
                                     &mut pairs,

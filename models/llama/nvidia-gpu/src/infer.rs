@@ -69,7 +69,7 @@ fn test_infer() {
         let weights = Weights::new(&model, .., 1, roll_cache_size, ctx);
         println!("load weights: {:?}", time.elapsed());
 
-        let mut worker = Worker::new(&gpu, meta.clone(), weights, true);
+        let mut worker = Worker::new(0, &gpu, meta.clone(), weights, true);
         let mut cache = meta.kv_cache(nctx).map(|size| stream.malloc::<u8>(size));
         let sin_cos = <Operators as llama::Operators>::build_sin_cos(dt_embd, nctx, dh, &stream);
         let indices = RandomSample::build_indices(nvoc, &stream);
