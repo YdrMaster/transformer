@@ -2,7 +2,8 @@
 use gguf::GGufModel;
 use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
 use operators::{
-    infini_rt::{self, Device, DeviceType::DEVICE_CPU},
+    infini::Device,
+    infini_rt::{self, DeviceType::DEVICE_CPU},
     random_sample::{KVPair, SampleArgs},
     TopoNode,
 };
@@ -59,12 +60,7 @@ fn test_infer() {
     println!("distribution: {devices:?}");
 
     infini_rt::init(DEVICE_CPU);
-    let (seeds, senders) = WorkerSeed::new(
-        devices
-            .into_iter()
-            .map(|id| Device { ty: DEVICE_CPU, id })
-            .collect(),
-    );
+    let (seeds, senders) = WorkerSeed::new(devices.into_iter().map(|_| Device::cpu()).collect());
     thread::scope(|s| {
         let _workers = zip(lens, seeds)
             .enumerate()

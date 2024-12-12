@@ -3,7 +3,8 @@
 use llama::{BlkWeight, Contiguous, LlamaBlkStorage, LlamaStorage, Tensor, WeightLoader};
 use operators::{
     all_reduce::{AllReduce, NonAllReduce},
-    infini_rt::{DevBlob, DevByte, Device, Event, HostBlob, Stream},
+    infini::Device,
+    infini_rt::{DevBlob, DevByte, Event, HostBlob, Stream},
     random_sample::infini::Operator as RandomSampleNpu,
     rearrange::infini::Operator as Rearrange,
     ByteOf, QueueOf, TopoNode,
