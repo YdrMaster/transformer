@@ -30,7 +30,7 @@ regex = "1.11"
 env_logger = "0.11"
 build-script-cfg = "0.0"
 
-operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "7aa1051", default-features = false }
-search-cl-tools = { git = "https://github.com/InfiniTensor/clrt", rev = "6846d52" }
-search-infini-tools = { git = "https://github.com/InfiniTensor/infini-toolkit", rev = "9943c78" }
-search-cuda-tools = { git = "https://github.com/YdrMaster/cuda-driver", rev = "e2ec203" }
+operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "360b664", default-features = false }
+search-cl-tools = { git = "https://github.com/InfiniTensor/clrt", rev = "9b6289d" }
+search-infini-tools = { git = "https://github.com/InfiniTensor/infini-rt", rev = "0e57976" }
+search-cuda-tools = { git = "https://github.com/YdrMaster/cuda-driver", rev = "5b9dbd9" }

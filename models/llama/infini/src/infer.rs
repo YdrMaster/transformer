@@ -1,5 +1,5 @@
 ﻿use crate::{Operators, RandomSample, Weights};
-use gguf::GGufModel;
+use gguf::{ggml_quants::digit_layout::types, GGufModel};
 use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
 use operators::{
     infini::Device,
@@ -82,7 +82,7 @@ fn test_infer() {
                         .kv_cache(meta.nctx)
                         .map(|size| stream.malloc::<u8>(size));
                     let sin_cos = <Operators as llama::Operators>::build_sin_cos(
-                        meta.dt_embd,
+                        types::F32,
                         meta.nctx,
                         meta.dh,
                         &stream,

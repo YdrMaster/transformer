@@ -184,9 +184,9 @@ where
         let sin = sin_cos.clone().index(0, 0);
         let cos = sin_cos.index(0, 1);
 
-        let pos = Tensor::new(ty::U32, &[nt]).map(|_| {
+        let pos = Tensor::new(ty::U64, &[nt]).map(|_| {
             Ops::Rope::build_pos(
-                ty::U32,
+                ty::U64,
                 nt,
                 requests.iter().map(|req| Seq {
                     pos: req.pos,
