@@ -3,7 +3,7 @@ use gguf::{ggml_quants::digit_layout::types, GGufModel};
 use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
 use operators::{
     infini::Device,
-    infini_rt::{self, DeviceType::DEVICE_CPU},
+    infini_rt,
     random_sample::{KVPair, SampleArgs},
     TopoNode,
 };
@@ -59,7 +59,7 @@ fn test_infer() {
     let count = devices.len();
     println!("distribution: {devices:?}");
 
-    infini_rt::init(DEVICE_CPU);
+    infini_rt::init(infini_rt::DEVICE_CPU);
     let (seeds, senders) = WorkerSeed::new(devices.into_iter().map(|_| Device::cpu()).collect());
     thread::scope(|s| {
         let _workers = zip(lens, seeds)
@@ -90,8 +90,6 @@ fn test_infer() {
 
                     let sample = RandomSample::new(&node);
                     let indices = RandomSample::build_indices(model.meta.nvoc, &stream);
-                    let mut pair = KVPair::new(0, f16::ZERO);
-                    let mut pairs = Tensor::kv_pair_vec(1, |size| stream.malloc::<u8>(size));
 
                     for task in tasks {
                         let Task {
@@ -127,6 +125,11 @@ fn test_infer() {
                             )
                             .unwrap();
                         if id == 0 {
+                            // NOTICE 目前 random sample 完全是 CPU 上执行的，没必要再拷贝了
+                            let mut pair = KVPair::new(0, f16::ZERO);
+                            let mut pairs = Tensor::kv_pair_vec(1, |_| unsafe {
+                                from_raw_parts_mut(&mut pair as *mut _ as _, size_of_val(&pair))
+                            });
                             sample
                                 .launch(
                                     &mut pairs,
@@ -137,18 +140,7 @@ fn test_infer() {
                                     &stream,
                                 )
                                 .unwrap();
-
                             stream.synchronize();
-                            device.memcpy_d2h(
-                                unsafe {
-                                    from_raw_parts_mut(
-                                        &mut pair as *mut _ as *mut u8,
-                                        pairs.get().len(),
-                                    )
-                                },
-                                pairs.get(),
-                            );
-
                             next.send(pair.idx() as _).unwrap()
                         }
                     }

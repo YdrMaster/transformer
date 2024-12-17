@@ -53,6 +53,7 @@ where
         let tensor = tensor.as_ref().map(|s| {
             let mut host = vec![0u8; s.len()];
             queue.get_device().memcpy_d2h(&mut host, s);
+            queue.synchronize();
             host
         });
         println!("{tensor}");
