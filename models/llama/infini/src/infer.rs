@@ -2,7 +2,7 @@
 use gguf::{ggml_quants::digit_layout::types, GGufModel};
 use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
 use operators::{
-    infini::Device,
+    infini::InfiniNode,
     infini_rt,
     random_sample::{KVPair, SampleArgs},
     TopoNode,
@@ -46,21 +46,34 @@ fn test_infer() {
     let sample_args = SampleArgs::new(temperature, top_p, top_k).expect("invalid sample args");
     println!("{sample_args:?}");
 
-    let devices = devices
+    let (ty, indices) = devices
         .map(|devices| {
-            Regex::new(r"\d+")
-                .unwrap()
-                .find_iter(&devices)
-                .map(|c| c.as_str().parse().unwrap())
-                .collect()
+            let (ty, tail) = devices.split_once(';').unwrap();
+            (
+                ty.to_ascii_lowercase(),
+                Regex::new(r"\d+")
+                    .unwrap()
+                    .find_iter(tail)
+                    .map(|c| c.as_str().parse().unwrap())
+                    .collect(),
+            )
         })
-        .unwrap_or_else(|| vec![0]);
-    let lens = vec![1; devices.len()];
-    let count = devices.len();
-    println!("distribution: {devices:?}");
+        .unwrap_or_else(|| ("cpu".into(), vec![0]));
+    let lens = vec![1; indices.len()];
+    let count = indices.len();
+    println!("{ty}; distribution: {indices:?}");
 
-    infini_rt::init(infini_rt::DEVICE_CPU);
-    let (seeds, senders) = WorkerSeed::new(devices.into_iter().map(|_| Device::cpu()).collect());
+    let (seeds, senders) = match &*ty {
+        "cpu" => {
+            infini_rt::init(infini_rt::DEVICE_CPU);
+            WorkerSeed::new(InfiniNode::cpu(indices.len()))
+        }
+        "nv" => {
+            infini_rt::init(infini_rt::DEVICE_NVIDIA);
+            WorkerSeed::new(InfiniNode::nv_gpu(&indices))
+        }
+        _ => todo!(),
+    };
     thread::scope(|s| {
         let _workers = zip(lens, seeds)
             .enumerate()

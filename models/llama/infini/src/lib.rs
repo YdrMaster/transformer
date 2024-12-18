@@ -2,11 +2,10 @@
 
 use llama::{BlkWeight, Contiguous, LlamaBlkStorage, LlamaStorage, Tensor, WeightLoader};
 use operators::{
-    all_reduce::{AllReduce, NonAllReduce},
-    infini::Device,
+    all_reduce::{infini::Operator as InfiniAllReduce, AllReduce},
+    infini::{Device, InfiniNode},
     infini_rt::{DevBlob, DevByte, Event, HostBlob, Stream},
     random_sample::infini::Operator as RandomSampleNpu,
-    rearrange::infini::Operator as Rearrange,
     ByteOf, QueueOf, TopoNode,
 };
 use std::{
@@ -15,7 +14,7 @@ use std::{
     ops::{Deref, RangeBounds},
 };
 
-pub struct Operators<N = Device, R = NonAllReduce<Device, Rearrange>>(PhantomData<(N, R)>);
+pub struct Operators<N = InfiniNode, R = InfiniAllReduce>(PhantomData<(N, R)>);
 
 pub type RandomSample = llama::RandomSample<Device, RandomSampleNpu>;
 
