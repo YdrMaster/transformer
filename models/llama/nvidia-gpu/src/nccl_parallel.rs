@@ -1,6 +1,7 @@
 ﻿use crate::{Operators, RandomSample, Weights};
 use gguf::GGufModel;
 use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
+use log::info;
 use operators::{
     all_reduce::nccl::Operator as AllReduce,
     cuda::{self, memcpy_d2h, NoDevice},
@@ -83,11 +84,14 @@ fn test_infer() {
 
                 let model = &model;
                 Some(s.spawn(move || {
+                    info!("worker[{id}] started");
                     let WorkerSeed { node, tasks } = seed;
                     node.processor().apply(|ctx| {
                         let stream = ctx.stream();
+                        info!("worker[{id}] loading weights...");
                         let weights = Weights::new(model, range, count, usize::MAX, ctx);
                         let mut worker = Worker::new(id, &node, meta.clone(), weights, id == 0);
+                        info!("worker[{id}] created");
                         let mut cache = meta
                             .kv_cache(meta.nctx)
                             .map(|size| stream.malloc::<u8>(size));

@@ -17,4 +17,5 @@ search-cuda-tools.workspace = true
 [dev-dependencies]
 test-utils = { workspace = true, features = ["llama"] }
 gguf.workspace = true
+log.workspace = true
 regex.workspace = true
