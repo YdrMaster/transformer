@@ -1,6 +1,7 @@
+use common::Contiguous;
 use llama::{
     ext::ggml_quants::{self, digit_layout::DigitLayout, f16, DataBlock, QuantExt},
-    BlkWeight, Contiguous, LlamaBlkStorage, LlamaStorage, Tensor,
+    BlkWeight, LlamaBlkStorage, LlamaStorage, Tensor,
     TensorUsage::Computation,
     WeightLoader,
 };

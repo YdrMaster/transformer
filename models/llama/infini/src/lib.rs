@@ -1,6 +1,7 @@
 #![cfg(detected)]
 
-use llama::{BlkWeight, Contiguous, LlamaBlkStorage, LlamaStorage, Tensor, WeightLoader};
+use common::Contiguous;
+use llama::{BlkWeight, LlamaBlkStorage, LlamaStorage, Tensor, WeightLoader};
 use operators::{
     all_reduce::{infini::Operator as InfiniAllReduce, AllReduce},
     infini::{Device, InfiniNode},

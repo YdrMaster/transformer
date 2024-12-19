@@ -1,6 +1,7 @@
 #![cfg(detected)]
 
-use llama::{BlkWeight, Contiguous, LlamaStorage, Tensor, WeightLoader};
+use common::Contiguous;
+use llama::{BlkWeight, LlamaStorage, Tensor, WeightLoader};
 use operators::{
     all_reduce::{AllReduce, NonAllReduce},
     clrt::{CommandQueue, Invalid, SvmBlob, SvmByte},

@@ -8,6 +8,7 @@ authors = ["YdrMaster <ydrml@hotmail.com>"]
 
 [dependencies]
 llama.path = "../common"
+common.workspace = true
 operators = { workspace = true, features = ["common-cpu"] }
 
 [dev-dependencies]

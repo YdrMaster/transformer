@@ -1,9 +1,11 @@
 #![cfg(driver_detected)]
 
-use llama::{BlkWeight, Contiguous, LlamaBlkStorage, LlamaStorage, Tensor, WeightLoader};
+use common::{Contiguous, Slab};
+use llama::{BlkWeight, LlamaBlkStorage, LlamaStorage, Tensor, WeightLoader};
+use log::trace;
 use operators::{
     all_reduce::{AllReduce, NonAllReduce},
-    cuda::{memcpy_d2h, CurrentCtx, DevByte, DevMem, Event, HostMem, Stream},
+    cuda::{memcpy_d2h, AsRaw, CurrentCtx, DevByte, DevMem, Event, HostMem, Stream},
     nvidia_gpu::Gpu,
     random_sample::nvidia_gpu::Operator as RandomSampleGpu,
     rearrange::nvidia_gpu::Operator as Rearrange,
@@ -15,6 +17,7 @@ use std::{
     mem::replace,
     ops::{Deref, RangeBounds},
     rc::Rc,
+    time::Instant,
 };
 
 pub struct Operators<N = Gpu, R = NonAllReduce<Gpu, Rearrange>>(PhantomData<(N, R)>);
@@ -157,11 +160,14 @@ impl<'blk> Weights<'blk> {
     ) -> Self {
         assert!(pool_size > 0);
         let stream = Rc::new(ctx.stream());
+        let igpu = unsafe { ctx.dev().as_raw() };
+        let mut slab = Slab::new();
         let blks = if pool_size < model.meta.nblk {
             let mut blks_host = model.blocks[0]
                 .as_ref()
                 .map(|_| Vec::with_capacity(model.meta.nblk));
-            for blk in model.blocks.iter() {
+            for (iblk, blk) in model.blocks.iter().enumerate() {
+                let time = Instant::now();
                 let blk = blk
                     .distribute(&model.meta, range.clone(), count, |len| {
                         ctx.malloc_host::<u8>(len)
@@ -188,6 +194,7 @@ impl<'blk> Weights<'blk> {
                     ffn_gate_up
                     ffn_down
                 }
+                trace!("blk{iblk} loaded to gpu{igpu} in {:?}", time.elapsed())
             }
             blks_host.map(|vec| {
                 let roll_cache = vec
@@ -206,18 +213,26 @@ impl<'blk> Weights<'blk> {
             let mut blks_dev = model.blocks[0]
                 .as_ref()
                 .map(|_| Vec::with_capacity(model.meta.nblk));
-            for blk in &model.blocks {
-                let blk = blk.distribute(&model.meta, range.clone(), count, |len| {
-                    ctx.malloc_host::<u8>(len)
+            for (iblk, blk) in model.blocks.iter().enumerate() {
+                let blk = blk.distribute(&model.meta, range.clone(), count, |size| {
+                    slab.take(&size)
+                        .unwrap_or_else(|| ctx.malloc_host::<u8>(size))
                 });
                 let loader = loader
                     .get_or_insert_with(|| blk.as_ref().map(|s| H2DLoader::new(s.len(), &stream)));
 
                 macro_rules! load {
                     ($( $ident:ident )+ ) => {
-                        $({ blks_dev.$ident.push(loader.$ident.load(blk.$ident, &stream)); })+
+                        $(
+                            let (dev, host) = loader.$ident.load(blk.$ident, &stream);
+                            if let Some(host) = host {
+                                slab.put(host.len(), host)
+                            }
+                            blks_dev.$ident.push(dev);
+                        )+
                     };
                 }
+                let time = Instant::now();
                 load! {
                     attn_norm
                     attn_qkv
@@ -226,6 +241,7 @@ impl<'blk> Weights<'blk> {
                     ffn_gate_up
                     ffn_down
                 }
+                trace!("blk{iblk} loaded to gpu{igpu} in {:?}", time.elapsed())
             }
             blks_dev.map(|vec| Cache::Static(vec.into_boxed_slice()))
         };
@@ -253,15 +269,25 @@ impl<'ctx> H2DLoader<'ctx> {
         }
     }
 
-    fn load(&mut self, host: Contiguous<HostMem<'ctx>>, stream: &Stream<'ctx>) -> DevMem<'ctx> {
+    fn load(
+        &mut self,
+        host: Contiguous<HostMem<'ctx>>,
+        stream: &Stream<'ctx>,
+    ) -> (DevMem<'ctx>, Option<HostMem<'ctx>>) {
         self.event.synchronize();
-        match host {
-            Contiguous::Borrowed(host) => self.host.copy_from_slice(host),
-            Contiguous::Owned(host) => self.host = host,
+        let cache = match host {
+            Contiguous::Borrowed(host) => {
+                self.host.copy_from_slice(host);
+                None
+            }
+            Contiguous::Owned(host) => Some(replace(&mut self.host, host)),
         };
         stream.memcpy_h2d(&mut self.dev, &self.host);
         self.event = stream.record();
-        replace(&mut self.dev, stream.malloc::<u8>(self.host.len()))
+        (
+            replace(&mut self.dev, stream.malloc::<u8>(self.host.len())),
+            cache,
+        )
     }
 }
 
