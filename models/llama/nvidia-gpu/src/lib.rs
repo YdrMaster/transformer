@@ -7,7 +7,7 @@ use operators::{
     nvidia_gpu::Gpu,
     random_sample::nvidia_gpu::Operator as RandomSampleGpu,
     rearrange::nvidia_gpu::Operator as Rearrange,
-    ByteOf, QueueOf, TopoNode,
+    Blob, ByteOf, QueueOf, TopoNode,
 };
 use std::{
     cell::{RefCell, RefMut},
@@ -207,9 +207,7 @@ impl<'blk> Weights<'blk> {
                 .as_ref()
                 .map(|_| Vec::with_capacity(model.meta.nblk));
             for blk in &model.blocks {
-                let blk = blk.distribute(&model.meta, range.clone(), count, |len| {
-                    ctx.malloc_host::<u8>(len)
-                });
+                let blk = blk.distribute(&model.meta, range.clone(), count, Blob::new);
                 let loader = loader
                     .get_or_insert_with(|| blk.as_ref().map(|s| H2DLoader::new(s.len(), &stream)));
 
@@ -240,7 +238,7 @@ impl<'blk> Weights<'blk> {
 
 struct H2DLoader<'ctx> {
     event: Event<'ctx>,
-    host: HostMem<'ctx>,
+    host: Blob,
     dev: DevMem<'ctx>,
 }
 
@@ -248,12 +246,12 @@ impl<'ctx> H2DLoader<'ctx> {
     fn new(size: usize, stream: &Stream<'ctx>) -> Self {
         Self {
             event: stream.record(),
-            host: stream.ctx().malloc_host::<u8>(size),
+            host: Blob::new(size),
             dev: stream.malloc::<u8>(size),
         }
     }
 
-    fn load(&mut self, host: Contiguous<HostMem<'ctx>>, stream: &Stream<'ctx>) -> DevMem<'ctx> {
+    fn load(&mut self, host: Contiguous<Blob>, stream: &Stream<'ctx>) -> DevMem<'ctx> {
         self.event.synchronize();
         match host {
             Contiguous::Borrowed(host) => self.host.copy_from_slice(host),

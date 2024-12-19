@@ -14,7 +14,7 @@ use regex::Regex;
 use std::{
     iter::zip,
     slice::{from_raw_parts, from_raw_parts_mut},
-    thread,
+    thread, u64,
 };
 use test_utils::{test_infer_paralle, Inference, Task, TokenizerAndPrompt, WorkerSeed};
 
@@ -88,6 +88,14 @@ fn test_infer() {
                     let WorkerSeed { node, tasks } = seed;
                     node.processor().apply(|ctx| {
                         let stream = ctx.stream();
+
+                        let mut free = 0;
+                        let mut total = 0;
+                        cuda::driver!(cuMemGetInfo_v2(&mut free, &mut total));
+
+                        ctx.dev().set_mempool_threshold(u64::MAX);
+                        let _ = stream.malloc::<u8>((free >> 30).saturating_sub(1) << 30);
+
                         info!("worker[{id}] loading weights...");
                         let weights = Weights::new(model, range, count, usize::MAX, ctx);
                         let mut worker = Worker::new(id, &node, meta.clone(), weights, id == 0);
