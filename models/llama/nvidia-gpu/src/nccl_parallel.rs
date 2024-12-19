@@ -114,9 +114,10 @@ fn test_infer() {
                                 embd,
                                 next,
                             } = task;
-                            let mut embd = meta.embd(nt).map(|size| {
-                                stream.from_host(unsafe { from_raw_parts(embd, size) })
-                            });
+                            let mut embd = meta
+                                .embd(nt)
+                                // NOTICE NCCL 无法与异步分配存储协同工作，所以 NCCL 会用到的存储只能使用 ctx 同步分配
+                                .map(|size| ctx.from_host(unsafe { from_raw_parts(embd, size) }));
                             let mut logits = meta
                                 .logits(if id == 0 { 1 } else { 0 })
                                 .map(|size| stream.malloc::<u8>(size));
