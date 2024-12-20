@@ -2,13 +2,15 @@
 use ggus::{GGmlTokenType, GGufMetaMapExt};
 use std::{
     borrow::Cow,
+    collections::HashMap,
     str::{from_utf8, from_utf8_unchecked},
 };
 use tokeneer::{utok, Bpe, Lpe, Method, Tokeneer};
 
 pub struct Tokenizer {
     tokenize: Box<dyn Tokenize>,
-    replace_space: Option<char>,
+    en_replace: HashMap<char, char>,
+    de_replace: HashMap<char, char>,
 }
 
 impl GGufModel<'_> {
@@ -23,7 +25,7 @@ impl GGufModel<'_> {
 
 impl Tokenizer {
     pub fn encode(&self, text: &str) -> Vec<utok> {
-        let space = self.replace_space.unwrap_or(' ');
+        let space = self.en_replace[&' '];
         let mut chars = text.chars();
         let mut text = match chars.next() {
             Some(c) => {
@@ -36,19 +38,21 @@ impl Tokenizer {
             None => return vec![],
         };
         for c in chars {
-            text.push(match c {
-                ' ' => space,
-                c => c,
-            })
+            text.push(*self.en_replace.get(&c).unwrap_or(&c))
         }
         self.tokenize.encode(&text)
     }
+
     pub fn decode(&self, token: utok) -> Cow<str> {
         let piece = self.tokenize.decode(token);
-        if let Some(c) = self.replace_space {
-            piece.replace(c, " ").into()
-        } else {
+        let ans = piece
+            .chars()
+            .map(|c| *self.de_replace.get(&c).unwrap_or(&c))
+            .collect::<String>();
+        if ans == piece {
             piece.into()
+        } else {
+            ans.into()
         }
     }
 
@@ -60,15 +64,10 @@ impl Tokenizer {
         assert_eq!(tokens.len(), scores.len());
         assert_eq!(tokens.len(), token_type.len());
 
-        let mut space_exist = false;
-        let mut replace_exist = false;
+        let mut detective = SpaceDetective::new();
         let vocabs = tokens.map(|piece| {
             let piece = piece.unwrap();
-            match piece {
-                " " => space_exist = true,
-                "Ġ" => replace_exist = true,
-                _ => {}
-            }
+            detective.record(piece);
             piece
         });
         let scores = scores.map(|score| score.unwrap());
@@ -84,28 +83,22 @@ impl Tokenizer {
 
         let mut tokeneer = Tokeneer::new(bpe);
         tokeneer.extend_special([(bos_piece, vec![bos]), (eos_piece, vec![eos])]);
+
+        let (en_replace, de_replace) = detective.build_map();
         Self {
             tokenize: Box::new(tokeneer),
-            replace_space: match (space_exist, replace_exist) {
-                (_, true) => Some('Ġ'),
-                (true, false) => None,
-                (false, false) => panic!("Unknown user-defined space"),
-            },
+            en_replace,
+            de_replace,
         }
     }
 
     fn lpe_from_gguf(gguf: &GGufModel) -> Self {
         let tokens = gguf.tokenizer_ggml_tokens().unwrap();
 
-        let mut space_exist = false;
-        let mut replace_exist = false;
+        let mut detective = SpaceDetective::new();
         let vocabs = tokens.map(|piece| {
             let piece = piece.unwrap();
-            match piece {
-                " " => space_exist = true,
-                "Ġ" => replace_exist = true,
-                _ => {}
-            }
+            detective.record(piece);
             piece.as_bytes()
         });
 
@@ -125,13 +118,12 @@ impl Tokenizer {
 
         let mut tokeneer = Tokeneer::new(bpe);
         tokeneer.extend_special([(bos_piece, vec![bos]), (eos_piece, vec![eos])]);
+
+        let (en_replace, de_replace) = detective.build_map();
         Self {
             tokenize: Box::new(tokeneer),
-            replace_space: match (space_exist, replace_exist) {
-                (_, true) => Some('Ġ'),
-                (true, false) => None,
-                (false, false) => panic!("Unknown user-defined space"),
-            },
+            en_replace,
+            de_replace,
         }
     }
 }
@@ -152,6 +144,65 @@ impl<M: tokeneer::Method> Tokenize for Tokeneer<M> {
     #[inline]
     fn decode(&self, token: utok) -> &str {
         unsafe { from_utf8_unchecked(self.internal().decode(token)) }
+    }
+}
+
+struct SpaceDetective([Record; 3]);
+const SPACE: char = ' ';
+const SPACE_: char = '▁';
+const SPACEG: char = 'Ġ';
+
+struct Record {
+    c: char,
+    maybe: bool,
+    count: usize,
+}
+
+impl Record {
+    fn new(c: char) -> Self {
+        Self {
+            c,
+            maybe: false,
+            count: 0,
+        }
+    }
+}
+
+impl SpaceDetective {
+    fn new() -> Self {
+        Self([SPACE, SPACE_, SPACEG].map(Record::new))
+    }
+
+    fn record(&mut self, text: &str) {
+        let mut buf = [0u8; 4];
+        for record in self.0.iter_mut() {
+            if text == record.c.encode_utf8(&mut buf) {
+                record.maybe = true;
+                record.count += 1;
+                break;
+            }
+            if text.contains(record.c) {
+                record.count += 1
+            }
+        }
+    }
+
+    fn build_map(&self) -> (HashMap<char, char>, HashMap<char, char>) {
+        let replace = self
+            .0
+            .iter()
+            .filter(|r| r.maybe)
+            .max_by_key(|r| r.count)
+            .unwrap()
+            .c;
+        let en = match replace {
+            SPACE => HashMap::new(),
+            SPACE_ => HashMap::from([(SPACE, SPACE_)]),
+            SPACEG => HashMap::from([(SPACE, SPACEG), ('\n', 'Ċ')]),
+            _ => unreachable!(),
+        };
+        let de = en.iter().map(|(&k, &v)| (v, k)).collect();
+        (en, de)
     }
 }
 
