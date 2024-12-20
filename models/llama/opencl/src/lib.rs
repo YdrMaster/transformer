@@ -1,4 +1,4 @@
-#![cfg(hw_detected)]
+#![cfg(detected)]
 
 use llama::{BlkWeight, Contiguous, LlamaStorage, Tensor, WeightLoader};
 use operators::{
@@ -132,4 +132,4 @@ impl WeightLoader for Weights {
 }
 
 #[cfg(test)]
-mod test_infer;
+mod infer;

@@ -1,5 +1,5 @@
 [package]
-name = "llama-ascend"
+name = "llama-infini"
 version = "0.0.0"
 edition = "2021"
 authors = ["YdrMaster <ydrml@hotmail.com>"]
@@ -8,12 +8,13 @@ authors = ["YdrMaster <ydrml@hotmail.com>"]
 
 [dependencies]
 llama.path = "../common"
-operators = { workspace = true, features = ["ascend"] }
+operators = { workspace = true, features = ["infini"] }
 
 [build-dependencies]
 build-script-cfg.workspace = true
-search-ascend-tools.workspace = true
+search-infini-tools.workspace = true
 
 [dev-dependencies]
-test-utils.workspace = true
+test-utils = { workspace = true, features = ["llama"] }
 gguf.workspace = true
+regex.workspace = true

@@ -1,8 +1,0 @@
-[package]
-name = "causal-lm"
-version = "0.0.0"
-edition = "2021"
-authors = ["YdrMaster <ydrml@hotmail.com>"]
-
-[build-dependencies]
-bindgen = "0.69"

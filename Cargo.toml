@@ -8,8 +8,8 @@ members = [
     "models/llama/common",
     "models/llama/common-cpu",
     "models/llama/opencl",
+    "models/llama/infini",
     "models/llama/nvidia-gpu",
-    "models/llama/ascend",
 
     "models/clip/common",
     "models/clip/common-cpu",
@@ -24,15 +24,17 @@ common.path = "common"
 gguf.path = "gguf"
 tensor.path = "tensor"
 causal-lm.path = "causal-lm"
-test-utils.path = "test-utils"
+test-utils = { path = "test-utils", default-features = false }
 
 ggus = "0.3"
+ndarray-layout = "0.0"
+log = "0.4"
+regex = "1.11"
 itertools = "0.13"
+env_logger = "0.11"
 build-script-cfg = "0.0"
 
-ndarray-layout = { git = "https://github.com/YdrMaster/ndarray-layout", rev = "f1fdd24" }
-operators = { git = "https://github.com/onenewcode/operators-rs", rev = "3112296", default-features = false }
-
-search-cl-tools = { git = "https://github.com/InfiniTensor/clrt", rev = "6846d52" }
-search-cuda-tools = { git = "https://github.com/YdrMaster/cuda-driver", rev = "e2ec203" }
-search-ascend-tools = { git = "https://github.com/InfiniTensor/ascendcl", rev = "bca7489" }
+operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "44ad48", default-features = false }
+search-cl-tools = { git = "https://github.com/InfiniTensor/clrt", rev = "9b6289d" }
+search-infini-tools = { git = "https://github.com/InfiniTensor/infini-rt", rev = "0e57976" }
+search-cuda-tools = { git = "https://github.com/YdrMaster/cuda-driver", rev = "5b9dbd9" }

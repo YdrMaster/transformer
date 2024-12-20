@@ -188,7 +188,7 @@ impl<T> Tensor<T> {
             // 所有维度可以合并成一个
             .merge(0..self.layout.ndim())
             // 合并后元素之间步长等于元素的长度
-            .map_or(false, |layout| {
+            .is_some_and(|layout| {
                 let [s] = layout.strides() else {
                     unreachable!()
                 };

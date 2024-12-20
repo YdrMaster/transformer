@@ -1,3 +1,9 @@
+#[cfg(feature = "llama")]
+mod llama;
+
+#[cfg(feature = "llama")]
+pub use llama::{test_infer_paralle, Task, WorkerSeed};
+
 use gguf::{
     ext::{utok, Mmap},
     map_files, GGufMetaMapExt, GGufModel, Message, Tokenizer,
@@ -7,12 +13,13 @@ use std::{
     fmt,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Once,
     time::{Duration, Instant},
-    vec,
 };
 
 pub struct Inference {
     pub model: Box<[Mmap]>,
+    pub devices: Option<String>,
     pub prompt: String,
     pub as_user: bool,
     pub temperature: f32,
@@ -21,10 +28,27 @@ pub struct Inference {
     pub max_steps: usize,
 }
 
+mod env {
+    pub const TEST_MODEL: &str = "TEST_MODEL";
+    pub const TEST_IMAGE: &str = "TEST_IMAGE";
+    pub const DEVICES: &str = "DEVICES";
+    pub const PROMPT: &str = "PROMPT";
+    pub const AS_USER: &str = "AS_USER";
+    pub const TEMPERATURE: &str = "TEMPERATURE";
+    pub const TOP_P: &str = "TOP_P";
+    pub const TOP_K: &str = "TOP_K";
+    pub const MAX_STEPS: &str = "MAX_STEPS";
+    pub const ROLL_CACHE_SIZE: &str = "ROLL_CACHE_SIZE";
+}
+use env::*;
+
 impl Inference {
     pub fn load() -> Option<Self> {
-        let Some(path) = var_os("TEST_MODEL") else {
-            println!("TEST_MODEL not set");
+        static ONCE: Once = Once::new();
+        ONCE.call_once(env_logger::init);
+
+        let Some(path) = var_os(TEST_MODEL) else {
+            println!("{TEST_MODEL} not set");
             return None;
         };
         let path = Path::new(&path);
@@ -42,25 +66,26 @@ impl Inference {
 
         Some(Self {
             model: map_files(path),
-            prompt: var("PROMPT").unwrap_or_else(|_| String::from("Once upon a time,")),
-            as_user: var("AS_USER").ok().is_some_and(|s| !s.is_empty()),
-            temperature: parse("TEMPERATURE", 0.),
-            top_p: parse("TOP_P", 1.),
-            top_k: parse("TOP_K", usize::MAX),
-            max_steps: parse("MAX_STEPS", usize::MAX),
+            devices: var(DEVICES).ok(),
+            prompt: var(PROMPT).unwrap_or_else(|_| String::from("Once upon a time,")),
+            as_user: var(AS_USER).ok().is_some_and(|s| !s.is_empty()),
+            temperature: parse(TEMPERATURE, 0.),
+            top_p: parse(TOP_P, 1.),
+            top_k: parse(TOP_K, usize::MAX),
+            max_steps: parse(MAX_STEPS, usize::MAX),
         })
     }
 }
 
 pub fn load_roll_cache_size() -> usize {
-    var("ROLL_CACHE_SIZE")
+    var(ROLL_CACHE_SIZE)
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(usize::MAX)
 }
 
 pub fn image() -> Option<PathBuf> {
-    var_os("TEST_IMAGE").map(PathBuf::from)
+    var_os(TEST_IMAGE).map(PathBuf::from)
 }
 
 pub struct TokenizerAndPrompt {
