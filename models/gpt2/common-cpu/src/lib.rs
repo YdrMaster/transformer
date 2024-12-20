@@ -47,6 +47,7 @@ where
     type Rearrange = op!(rearrange);
     type AllReduce = R;
     type AddRows = op!(add_rows);
+    type Mlp = op!(gpt2_mlp);
     fn debug<T>(tensor: &Tensor<T>)
     where
         T: Deref<Target = [ByteOf<Self::Hardware>]>,
