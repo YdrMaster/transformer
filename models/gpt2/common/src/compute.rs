@@ -10,7 +10,7 @@ use operators::{
     ByteOf, Hardware, LaunchError, Operator, QueueAlloc, QueueOf, TopoNode, Workspace,
 };
 use std::ops::{Deref, DerefMut};
-use tensor::{split, Blob, Tensor};
+use tensor::{split, Tensor};
 
 pub trait Operators {
     type Hardware: Hardware;
@@ -62,6 +62,7 @@ pub trait WeightLoader {
     fn output(&self, queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_>;
     fn pos_embd<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Memory<'a>;
 }
+
 pub struct Gpt2Worker<Ops: Operators, W> {
     meta: Gpt2Meta,
     weights: WeightDecorator<W>,
@@ -70,14 +71,11 @@ pub struct Gpt2Worker<Ops: Operators, W> {
     attn_kv_cached: Ops::AttnKVCached,
     rearrange: Ops::Rearrange,
     all_reduce: Ops::AllReduce,
-    residual: bool,
     add_rows: Ops::AddRows,
-    pub debug: bool,
 }
-// worker: meta + weight + operators
 
 impl<Ops: Operators, W> Gpt2Worker<Ops, W> {
-    pub fn new(node: &Ops::TopoNode, meta: Gpt2Meta, weights: W, residual: bool) -> Self {
+    pub fn new(node: &Ops::TopoNode, meta: Gpt2Meta, weights: W) -> Self {
         let processor = node.processor();
         Self {
             weights: meta.decorator(weights), // meta.decorator
@@ -88,8 +86,6 @@ impl<Ops: Operators, W> Gpt2Worker<Ops, W> {
             rearrange: Ops::Rearrange::new(processor),
             all_reduce: Ops::AllReduce::new(node),
             add_rows: Ops::AddRows::new(processor),
-            residual,
-            debug: true,
         }
     }
 
@@ -203,7 +199,7 @@ where
             let qkv = qkv.tile(1, &[nh + nkvh + nkvh, dh]);
             split!(qkv => q, k, v; [nh, nkvh, nkvh] @ 1);
             let mut q = q;
-            let mut k = k;
+            let k = k;
             let v = v;
             // attn
             {
@@ -293,7 +289,7 @@ where
                         let tanh_arg = sqrt_2_over_pi * (x + c * x.powi(3));
                         0.5 * x * (1.0 + tanh_arg.tanh())
                     }
-                    let mut base = tmp.base_mut().cast::<f32>();
+                    let base = tmp.base_mut().cast::<f32>();
                     //获取步长，必须为二维张量
                     let &[sgn, sgd] = tmp.strides() else {
                         unreachable!()
@@ -348,12 +344,12 @@ where
         // 需要转置
         let output = self.weights.output_weight(queue).transpose(&[1, 0]);
         // 获取最后一个 token的输出
-        let mut x = x.map_slice_mut().slice(0, 0, 1, dst);
+        let x = x.map_slice_mut().slice(0, 0, 1, dst);
         self.mat_mul(&mut logits, 0., &x, &output, 1., workspace, queue_alloc)
     }
 }
 
-//operators
+// operators
 #[allow(clippy::too_many_arguments)]
 impl<Ops, W> Gpt2Worker<Ops, W>
 where
@@ -466,6 +462,7 @@ where
             queue_alloc,
         )
     }
+
     fn rearrange<Y, X, QA>(
         &self,
         dst: &mut Tensor<Y>,
@@ -489,6 +486,7 @@ where
             queue_alloc,
         )
     }
+
     fn all_reduce<X, QA>(
         &self,
         x: &mut Tensor<X>,
@@ -565,6 +563,7 @@ struct WeightDecorator<W> {
 
     weights: W,
 }
+
 // tensor<usize> + weight
 impl Gpt2Meta {
     fn decorator<W>(&self, weights: W) -> WeightDecorator<W> {
@@ -592,6 +591,7 @@ impl Gpt2Meta {
         }
     }
 }
+
 // decorator，new tensor<usize>
 impl<W: WeightLoader> WeightDecorator<W> {
     #[inline]
@@ -604,7 +604,6 @@ impl<W: WeightLoader> WeightDecorator<W> {
             .clone()
             .map(|_| self.weights.load_blk(BlkWeight::AttnNormw, iblk, queue))
     }
-
     #[inline]
     pub fn attn_norm_bias(
         &self,
@@ -615,7 +614,6 @@ impl<W: WeightLoader> WeightDecorator<W> {
             .clone()
             .map(|_| self.weights.load_blk(BlkWeight::AttnNormb, iblk, queue))
     }
-
     #[inline]
     pub fn attn_qkv_weight(
         &self,
@@ -626,7 +624,6 @@ impl<W: WeightLoader> WeightDecorator<W> {
             .clone()
             .map(|_| self.weights.load_blk(BlkWeight::AttnQKVw, iblk, queue))
     }
-
     #[inline]
     pub fn attn_qkv_bias(
         &self,
@@ -637,7 +634,6 @@ impl<W: WeightLoader> WeightDecorator<W> {
             .clone()
             .map(|_| self.weights.load_blk(BlkWeight::AttnQKVb, iblk, queue))
     }
-
     #[inline]
     pub fn attn_output_weight(
         &self,
@@ -648,7 +644,6 @@ impl<W: WeightLoader> WeightDecorator<W> {
             .clone()
             .map(|_| self.weights.load_blk(BlkWeight::AttnOw, iblk, queue))
     }
-
     #[inline]
     pub fn attn_output_bias(
         &self,
@@ -665,11 +660,10 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &QueueOf<W::Hardware>,
     ) -> Tensor<W::Memory<'_>> {
-        self.attn_o_bias
+        self.ffn_norm_weight
             .clone()
             .map(|_| self.weights.load_blk(BlkWeight::FfnNormw, iblk, queue))
     }
-
     #[inline]
     pub fn ffn_norm_bias(
         &self,
@@ -680,7 +674,6 @@ impl<W: WeightLoader> WeightDecorator<W> {
             .clone()
             .map(|_| self.weights.load_blk(BlkWeight::FfnNormb, iblk, queue))
     }
-
     #[inline]
     pub fn ffn_up_weight(
         &self,
@@ -691,14 +684,12 @@ impl<W: WeightLoader> WeightDecorator<W> {
             .clone()
             .map(|_| self.weights.load_blk(BlkWeight::FfnUpw, iblk, queue))
     }
-
     #[inline]
     pub fn ffn_up_bias(&self, iblk: usize, queue: &QueueOf<W::Hardware>) -> Tensor<W::Memory<'_>> {
         self.ffn_up_bias
             .clone()
             .map(|_| self.weights.load_blk(BlkWeight::FfnUpb, iblk, queue))
     }
-
     #[inline]
     pub fn ffn_down_weight(
         &self,
@@ -709,7 +700,6 @@ impl<W: WeightLoader> WeightDecorator<W> {
             .clone()
             .map(|_| self.weights.load_blk(BlkWeight::FfnDownw, iblk, queue))
     }
-
     #[inline]
     pub fn ffn_down_bias(
         &self,
@@ -720,21 +710,18 @@ impl<W: WeightLoader> WeightDecorator<W> {
             .clone()
             .map(|_| self.weights.load_blk(BlkWeight::FfnDownb, iblk, queue))
     }
-
     #[inline]
     pub fn output_norm_weight(&self, queue: &QueueOf<W::Hardware>) -> Tensor<W::Memory<'_>> {
         self.output_norm_weight
             .clone()
             .map(|_| self.weights.output_norm_weight(queue))
     }
-
     #[inline]
     pub fn output_norm_bias(&self, queue: &QueueOf<W::Hardware>) -> Tensor<W::Memory<'_>> {
         self.output_norm_bias
             .clone()
             .map(|_| self.weights.output_norm_bias(queue))
     }
-
     #[inline]
     pub fn output_weight(&self, queue: &QueueOf<W::Hardware>) -> Tensor<W::Memory<'_>> {
         self.output_weight

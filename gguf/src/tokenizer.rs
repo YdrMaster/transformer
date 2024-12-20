@@ -109,12 +109,15 @@ impl Tokenizer {
             piece.as_bytes()
         });
 
+        let bos = gguf.tokenizer_ggml_bos_token_id().unwrap();
+        let eos = gguf.tokenizer_ggml_eos_token_id().unwrap();
         let unk = gguf
             .tokenizer_ggml_unknown_token_id()
             .or(gguf.tokenizer_ggml_padding_token_id())
-            .unwrap();
-        let bos = gguf.tokenizer_ggml_bos_token_id().unwrap();
-        let eos = gguf.tokenizer_ggml_eos_token_id().unwrap();
+            .unwrap_or_else(|_| {
+                assert_eq!(bos, eos);
+                bos
+            });
 
         let bpe = Lpe::new(vocabs, unk);
         let bos_piece = from_utf8(bpe.decode(bos)).unwrap().to_string();

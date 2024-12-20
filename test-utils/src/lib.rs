@@ -140,6 +140,7 @@ pub fn test_infer(
 
     let mut tokens = tokenizer.encode(prompt);
     let num_prompt_tokens = tokens.len();
+
     let mut prefill = Duration::ZERO;
     let mut decode = Duration::ZERO;
 
@@ -162,7 +163,6 @@ pub fn test_infer(
 
         let piece = tokenizer.decode(next);
         print_now!("{piece}");
-
         tokens = vec![next];
     }
 

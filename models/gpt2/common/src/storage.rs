@@ -1,12 +1,5 @@
-use crate::{normalize, Gpt2Meta};
-use common::{borrow, own, Contiguous};
-use gguf::{GGufMetaMapExt, GGufModel};
-use std::ops::{DerefMut, RangeBounds};
-use tensor::Tensor;
-
-use ext::Mmap;
-use ggml_quants::digit_layout::DigitLayout;
-use gguf::*;
+use crate::Gpt2Meta;
+use gguf::{ext::Mmap, map_files, GGufMetaMapExt, GGufModel};
 use std::path::Path;
 
 #[derive(Clone)]
@@ -129,47 +122,6 @@ impl<T> BlkStorage<T> {
             ffn_down_weight: &self.ffn_down_weight,
             ffn_norm_bias: &self.ffn_norm_bias,
             ffn_norm_weight: &self.ffn_norm_weight,
-        }
-    }
-}
-
-impl<'w> BlkStorage<&'w [u8]> {
-    pub fn distribute<U>(
-        &self,
-        meta: &Gpt2Meta,
-        range: impl RangeBounds<usize>,
-        count: usize,
-        mut f: impl FnMut(usize) -> U,
-    ) -> BlkStorage<Contiguous<'w, U>>
-    where
-        U: DerefMut<Target = [u8]>,
-    {
-        let range = normalize(range, count);
-        let start = range.start;
-        let len = range.len();
-        assert!(0 < len && range.end <= count);
-
-        fn tensor<'t>(dt: DigitLayout, shape: &[usize], data: &'t [u8]) -> Tensor<&'t [u8]> {
-            Tensor::new(dt, shape).map(|size| {
-                debug_assert_eq!(size, data.len());
-                data
-            })
-        }
-
-        BlkStorage {
-            attn_qkv_bias: borrow(&self.attn_qkv_bias),
-            attn_qkv_weight: borrow(&self.attn_qkv_weight),
-            attn_output_bias: borrow(&self.attn_output_bias),
-            attn_output_weight: borrow(&self.attn_output_weight),
-            attn_norm_bias: borrow(&self.attn_norm_bias),
-            attn_norm_weight: borrow(&self.attn_norm_weight),
-
-            ffn_up_bias: borrow(&self.ffn_up_bias),
-            ffn_up_weight: borrow(&self.ffn_up_weight),
-            ffn_down_bias: borrow(&self.ffn_down_bias),
-            ffn_down_weight: borrow(&self.ffn_down_weight),
-            ffn_norm_bias: borrow(&self.ffn_norm_bias),
-            ffn_norm_weight: borrow(&self.ffn_norm_weight),
         }
     }
 }

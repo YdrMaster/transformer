@@ -6,7 +6,7 @@ use operators::{
     random_sample::{KVPair, SampleArgs},
     Blob,
 };
-use std::{iter::zip, slice::from_raw_parts_mut};
+use std::slice::from_raw_parts_mut;
 use test_utils::{Inference, TokenizerAndPrompt};
 
 type Worker<'w> = Gpt2Worker<Operators, Weights<'w>>;
@@ -21,6 +21,7 @@ fn test_infer() {
         top_p,
         top_k,
         max_steps,
+        ..
     }) = Inference::load()
     else {
         return;
@@ -40,8 +41,8 @@ fn test_infer() {
         d,
         ..
     } = &model.meta;
-    let weights = Weights::new(&model, .., 1);
-    let mut worker = Worker::new(&Cpu, model.meta.clone(), weights, true);
+    let weights = Weights::new(&model);
+    let mut worker = Worker::new(&Cpu, model.meta.clone(), weights);
     let mut cache = model.meta.kv_cache(nctx).map(Blob::new);
     let indices = RandomSample::build_indices(nvoc, &ThisThread);
     let sample = RandomSample::new(&Cpu);
