@@ -8,8 +8,10 @@ authors = ["YdrMaster <ydrml@hotmail.com>"]
 
 [dependencies]
 llama.path = "../common"
+common.workspace = true
 operators = { workspace = true, features = ["common-cpu"] }
 
 [dev-dependencies]
-test-utils.workspace = true
+test-utils = { workspace = true, features = ["llama"] }
 gguf.workspace = true
+regex.workspace = true

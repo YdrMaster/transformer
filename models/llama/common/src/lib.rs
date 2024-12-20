@@ -6,7 +6,6 @@ use gguf::ggml_quants::digit_layout::DigitLayout;
 use std::ops::{Range, RangeBounds};
 
 pub use args::{Args as LlamaArgs, Request as LlamaRequest};
-pub use common::Contiguous;
 pub use compute::{BlkWeight, LlamaWorker, Operators, WeightLoader};
 pub use storage::{BlkStorage as LlamaBlkStorage, Storage as LlamaStorage};
 pub use tensor::{RandomSample, Tensor};

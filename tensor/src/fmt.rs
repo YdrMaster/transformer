@@ -56,6 +56,16 @@ impl DataFmt for u32 {
     }
 }
 
+impl DataFmt for u64 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if *self == 0 {
+            write!(f, " ________")
+        } else {
+            write!(f, "{self:>6}")
+        }
+    }
+}
+
 impl<Physical: Deref<Target = [u8]>> fmt::Display for Tensor<Physical> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.dt {
@@ -64,6 +74,7 @@ impl<Physical: Deref<Target = [u8]>> fmt::Display for Tensor<Physical> {
             primitive::F32 => self.map_slice().write_tensor::<f32>(&mut vec![], f),
             primitive::F64 => self.map_slice().write_tensor::<f64>(&mut vec![], f),
             primitive::U32 => self.map_slice().write_tensor::<u32>(&mut vec![], f),
+            primitive::U64 => self.map_slice().write_tensor::<u64>(&mut vec![], f),
             _ => todo!(),
         }
     }
