@@ -30,19 +30,12 @@ pub trait Operators {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BlkWeight {
-    AttnNormw,
-    AttnNormb,
-    AttnQKVw,
-    AttnQKVb,
-    AttnOw,
-    AttnOb,
-
-    FfnNormw,
-    FfnNormb,
-    FfnUpw,
-    FfnUpb,
-    FfnDownw,
-    FfnDownb,
+    AttnNorm,
+    AttnQKV,
+    AttnO,
+    FfnNorm,
+    FfnUp,
+    FfnDown,
 }
 
 pub trait WeightLoader {
@@ -56,10 +49,9 @@ pub trait WeightLoader {
         which: BlkWeight,
         iblk: usize,
         queue: &QueueOf<Self::Hardware>,
-    ) -> Self::Memory<'_>;
+    ) -> [Self::Memory<'_>; 2];
 
-    fn output_norm_weight(&self, queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_>;
-    fn output_norm_bias(&self, queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_>;
+    fn output_norm(&self, queue: &QueueOf<Self::Hardware>) -> [Self::Memory<'_>; 2];
     fn output(&self, queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_>;
     fn pos_embd<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Memory<'a>;
 }
@@ -119,7 +111,6 @@ impl<Ops: Operators, W> Gpt2Worker<Ops, W> {
     }
 }
 
-//launch!!!
 impl<Ops, W> Gpt2Worker<Ops, W>
 where
     Ops: Operators,
@@ -151,7 +142,6 @@ where
             nblk,
             nh,
             nkvh,
-            d,
             dh,
             ..
         } = self.meta;
@@ -179,19 +169,16 @@ where
         let req_split = requests.iter().map(|req| req.seq_len).collect::<Vec<_>>();
 
         for iblk in 0..nblk {
-            // layer_norm
             {
-                let (scale, bias) = self.weights.attn_norm_weight_bias(iblk, queue);
-                let inplace = unsafe { x.map_slice_static() };
-                self.layer_norm(&mut x1, &inplace, &scale, &bias, workspace, queue_alloc)?;
+                let [scale, bias] = self.weights.attn_norm(iblk, queue);
+                self.layer_norm(&mut x1, &x, &scale, &bias, workspace, queue_alloc)?
             }
-
             let (buf, workspace) = workspace.split_at_mut(*qkv.get());
             let mut qkv = qkv.clone().map(|_| buf);
-            //  Conv1D
             {
-                let (scale, bias) = self.weights.attn_qkv_weight_bias(iblk, queue);
-                let bias = bias.tile(0, &[1, (nh + nkvh + nkvh) * dh]).broadcast(0, nt);
+                let [scale, bias] = self.weights.attn_qkv(iblk, queue);
+                let cols = bias.shape()[0];
+                let bias = bias.tile(0, &[1, cols]).broadcast(0, nt);
                 self.rearrange(&mut qkv, &bias, workspace, queue_alloc)?;
                 self.mat_mul(&mut qkv, 1., &x1, &scale, 1., workspace, queue_alloc)?;
             }
@@ -200,7 +187,6 @@ where
             let mut q = q;
             let k = k;
             let v = v;
-            // attn
             {
                 let q = q.map_slice_mut().transpose(&[1, 0]);
                 let k = k.map_slice().transpose(&[1, 0]);
@@ -232,45 +218,42 @@ where
                     )?;
                 }
             }
-            //  Conv1D
             {
-                let (scale, bias) = self.weights.attn_output_weight_bias(iblk, queue);
                 let o = q.map_slice().merge(1..3).unwrap();
-                let bias = bias.tile(0, &[1, d]).broadcast(0, nt);
-
+                let [scale, bias] = self.weights.attn_o(iblk, queue);
+                let cols = bias.shape()[0];
+                let bias = bias.tile(0, &[1, cols]).broadcast(0, nt);
                 self.rearrange(&mut x1, &bias, workspace, queue_alloc)?;
-                // x1 shape -> [nt, 768]
                 self.mat_mul(&mut x1, 1., &o, &scale, 1., workspace, queue_alloc)?;
             }
             self.all_reduce(&mut x1, workspace, queue_alloc)?;
 
-            // 残差连接 wte+wpe的数据
+            // 残差连接 wte+wpe 的数据
+            self.add_rows.launch(
+                &add_rows::Args {
+                    dst_layout: old_token_embd_l.clone(),
+                    dst_base: x1.base_mut(),
+                    src_layout: x.layout(),
+                    src_base: x.base(),
+                    idx_layout: idx_add.layout(),
+                    idx_base: idx_add.map_slice().base(),
+                },
+                workspace,
+                queue_alloc,
+            )?;
             {
-                self.add_rows.launch(
-                    &add_rows::Args {
-                        dst_layout: old_token_embd_l.clone(),
-                        dst_base: x1.base_mut(),
-                        src_layout: x.layout(),
-                        src_base: x.base(),
-                        idx_layout: idx_add.layout(),
-                        idx_base: idx_add.map_slice().base(),
-                    },
-                    workspace,
-                    queue_alloc,
-                )?;
-            }
-            // layer_norm
-            {
-                let (scale, bias) = self.weights.ffn_norm_weight_bias(iblk, queue);
-                self.layer_norm(&mut x, &x1, &scale, &bias, workspace, queue_alloc)?;
+                let [scale, bias] = self.weights.ffn_norm(iblk, queue);
+                self.layer_norm(&mut x, &x1, &scale, &bias, workspace, queue_alloc)?
             }
             self.mlp(&mut x, iblk, workspace, queue_alloc)?;
-            // 残差连接 att之后的数据
-            {
-                let mut tmp_x = x.map_slice_mut().tile(0, &[1, nt]);
-                self.add_rows(&mut tmp_x, &x1, &idx_add, workspace, queue_alloc)?;
-            }
+            // 残差连接 att 之后的数据
+            let mut x = x.map_slice_mut().tile(0, &[1, nt]);
+            self.add_rows(&mut x, &x1, &idx_add, workspace, queue_alloc)?
         }
+        if logits.shape()[0] == 0 {
+            return Ok(());
+        }
+
         // 集中要采样的 token
         // NOTICE: 输入之前将请求按 seq len 升序排列可降低移动开销
         let mut dst = 0;
@@ -287,20 +270,18 @@ where
             }
         }
         assert_eq!(dst, logits.shape()[0]);
-        // layer_norm
-        {
-            let (scale, bias) = self.weights.output_norm_weigh_bias(queue);
 
+        let mut x = x.map_slice_mut().slice(0, 0, 1, dst);
+        {
             let inplace = unsafe { x.map_slice_static() };
-            self.layer_norm(&mut x, &inplace, &scale, &bias, workspace, queue_alloc)?;
+            let [scale, bias] = self.weights.output_norm(queue);
+            self.layer_norm(&mut x, &inplace, &scale, &bias, workspace, queue_alloc)?
         }
         let output = self.weights.output_weight(queue).transpose(&[1, 0]);
-        let x = x.map_slice_mut().slice(0, 0, 1, dst);
         self.mat_mul(&mut logits, 0., &x, &output, 1., workspace, queue_alloc)
     }
 }
 
-// operators
 #[allow(clippy::too_many_arguments)]
 impl<Ops, W> Gpt2Worker<Ops, W>
 where
@@ -490,6 +471,7 @@ where
             queue_alloc,
         )
     }
+
     fn mlp<Y, QA>(
         &self,
         y: &mut Tensor<Y>,
@@ -502,8 +484,8 @@ where
         QA: QueueAlloc<Hardware = Ops::Hardware>,
     {
         let queue = queue_alloc.queue();
-        let (up_weight, up_bias) = self.weights.ffn_up_weight_bias(iblk, queue);
-        let (down_weight, down_bias) = self.weights.ffn_down_weight_bias(iblk, queue);
+        let [up_weight, up_bias] = self.weights.ffn_up(iblk, queue);
+        let [down_weight, down_bias] = self.weights.ffn_down(iblk, queue);
         self.mlp.launch(
             &gpt2_mlp::Args {
                 y_layout: y.layout(),
@@ -524,170 +506,135 @@ where
 }
 
 struct WeightDecorator<W> {
-    attn_norm_weight: Tensor<usize>,
-    attn_norm_bias: Tensor<usize>,
-    attn_qkv_weight: Tensor<usize>,
-    attn_qkv_bias: Tensor<usize>,
-    attn_o_weight: Tensor<usize>,
-    attn_o_bias: Tensor<usize>,
+    attn_norm_w: Tensor<usize>,
+    attn_norm_b: Tensor<usize>,
+    attn_qkv_w: Tensor<usize>,
+    attn_qkv_b: Tensor<usize>,
+    attn_o_w: Tensor<usize>,
+    attn_o_b: Tensor<usize>,
 
-    ffn_norm_weight: Tensor<usize>,
-    ffn_norm_bias: Tensor<usize>,
-    ffn_up_weight: Tensor<usize>,
-    ffn_up_bias: Tensor<usize>,
-    ffn_down_weight: Tensor<usize>,
-    ffn_down_bias: Tensor<usize>,
+    ffn_norm_w: Tensor<usize>,
+    ffn_norm_b: Tensor<usize>,
+    ffn_up_w: Tensor<usize>,
+    ffn_up_b: Tensor<usize>,
+    ffn_down_w: Tensor<usize>,
+    ffn_down_b: Tensor<usize>,
 
-    output_norm_weight: Tensor<usize>,
-    output_norm_bias: Tensor<usize>,
+    output_norm_w: Tensor<usize>,
+    output_norm_b: Tensor<usize>,
     output_weight: Tensor<usize>,
     pos_embd: Tensor<usize>,
 
     weights: W,
 }
 
-// tensor<usize> + weight
 impl Gpt2Meta {
     fn decorator<W>(&self, weights: W) -> WeightDecorator<W> {
         use crate::TensorUsage::Computation;
         WeightDecorator {
-            attn_norm_weight: self.attn_norm_weight(),
-            attn_norm_bias: self.attn_norm_bias(),
-            attn_qkv_weight: self.attn_qkv_weight(Computation),
-            attn_qkv_bias: self.attn_qkv_bias(),
-            attn_o_weight: self.attn_o_weight(Computation),
-            attn_o_bias: self.attn_o_bias(),
+            attn_norm_w: self.attn_norm_w(),
+            attn_norm_b: self.attn_norm_b(),
+            attn_qkv_w: self.attn_qkv_w(Computation),
+            attn_qkv_b: self.attn_qkv_b(),
+            attn_o_w: self.attn_o_w(Computation),
+            attn_o_b: self.attn_o_b(),
 
-            ffn_norm_weight: self.ffn_norm_weight(),
-            ffn_norm_bias: self.ffn_norm_bias(),
-            ffn_up_weight: self.ffn_up_weight(Computation),
-            ffn_up_bias: self.ffn_up_bias(),
-            ffn_down_weight: self.ffn_down_weight(Computation),
-            ffn_down_bias: self.ffn_down_bias(),
+            ffn_norm_w: self.ffn_norm_w(),
+            ffn_norm_b: self.ffn_norm_b(),
+            ffn_up_w: self.ffn_up_w(Computation),
+            ffn_up_b: self.ffn_up_b(),
+            ffn_down_w: self.ffn_down_w(Computation),
+            ffn_down_b: self.ffn_down_b(),
 
-            output_norm_weight: self.output_norm_weight(),
-            output_norm_bias: self.output_norm_bias(),
+            output_norm_w: self.output_norm_w(),
+            output_norm_b: self.output_norm_b(),
             output_weight: self.output_weight(),
             pos_embd: self.pos_embd(),
+
             weights,
         }
     }
 }
 
-// decorator，new tensor<usize>
 impl<W: WeightLoader> WeightDecorator<W> {
-    #[inline]
-    pub fn attn_norm_weight_bias(
+    pub fn attn_norm(
         &self,
         iblk: usize,
         queue: &QueueOf<W::Hardware>,
-    ) -> (Tensor<W::Memory<'_>>, Tensor<W::Memory<'_>>) {
-        (
-            self.attn_norm_weight
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::AttnNormw, iblk, queue)),
-            self.attn_norm_bias
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::AttnNormb, iblk, queue)),
-        )
+    ) -> [Tensor<W::Memory<'_>>; 2] {
+        let [w, b] = self.weights.load_blk(BlkWeight::AttnNorm, iblk, queue);
+        [
+            self.attn_norm_w.clone().map(|_| w),
+            self.attn_norm_b.clone().map(|_| b),
+        ]
     }
 
-    #[inline]
-    pub fn attn_qkv_weight_bias(
+    pub fn attn_qkv(
         &self,
         iblk: usize,
         queue: &QueueOf<W::Hardware>,
-    ) -> (Tensor<W::Memory<'_>>, Tensor<W::Memory<'_>>) {
-        (
-            self.attn_qkv_weight
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::AttnQKVw, iblk, queue)),
-            self.attn_qkv_bias
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::AttnQKVb, iblk, queue)),
-        )
+    ) -> [Tensor<W::Memory<'_>>; 2] {
+        let [w, b] = self.weights.load_blk(BlkWeight::AttnQKV, iblk, queue);
+        [
+            self.attn_qkv_w.clone().map(|_| w),
+            self.attn_qkv_b.clone().map(|_| b),
+        ]
     }
-    #[inline]
-    pub fn attn_output_weight_bias(
+
+    pub fn attn_o(&self, iblk: usize, queue: &QueueOf<W::Hardware>) -> [Tensor<W::Memory<'_>>; 2] {
+        let [w, b] = self.weights.load_blk(BlkWeight::AttnO, iblk, queue);
+        [
+            self.attn_o_w.clone().map(|_| w),
+            self.attn_o_b.clone().map(|_| b),
+        ]
+    }
+
+    pub fn ffn_norm(
         &self,
         iblk: usize,
         queue: &QueueOf<W::Hardware>,
-    ) -> (Tensor<W::Memory<'_>>, Tensor<W::Memory<'_>>) {
-        (
-            self.attn_o_weight
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::AttnOw, iblk, queue)),
-            self.attn_o_bias
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::AttnOb, iblk, queue)),
-        )
+    ) -> [Tensor<W::Memory<'_>>; 2] {
+        let [w, b] = self.weights.load_blk(BlkWeight::FfnNorm, iblk, queue);
+        [
+            self.ffn_norm_w.clone().map(|_| w),
+            self.ffn_norm_b.clone().map(|_| b),
+        ]
     }
-    #[inline]
-    pub fn ffn_norm_weight_bias(
+
+    pub fn ffn_up(&self, iblk: usize, queue: &QueueOf<W::Hardware>) -> [Tensor<W::Memory<'_>>; 2] {
+        let [w, b] = self.weights.load_blk(BlkWeight::FfnUp, iblk, queue);
+        [
+            self.ffn_up_w.clone().map(|_| w),
+            self.ffn_up_b.clone().map(|_| b),
+        ]
+    }
+
+    pub fn ffn_down(
         &self,
         iblk: usize,
         queue: &QueueOf<W::Hardware>,
-    ) -> (Tensor<W::Memory<'_>>, Tensor<W::Memory<'_>>) {
-        (
-            self.ffn_norm_weight
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::FfnNormw, iblk, queue)),
-            self.ffn_norm_bias
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::FfnNormb, iblk, queue)),
-        )
+    ) -> [Tensor<W::Memory<'_>>; 2] {
+        let [w, b] = self.weights.load_blk(BlkWeight::FfnDown, iblk, queue);
+        [
+            self.ffn_down_w.clone().map(|_| w),
+            self.ffn_down_b.clone().map(|_| b),
+        ]
     }
-    #[inline]
-    pub fn ffn_up_weight_bias(
-        &self,
-        iblk: usize,
-        queue: &QueueOf<W::Hardware>,
-    ) -> (Tensor<W::Memory<'_>>, Tensor<W::Memory<'_>>) {
-        (
-            self.ffn_up_weight
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::FfnUpw, iblk, queue)),
-            self.ffn_up_bias
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::FfnUpb, iblk, queue)),
-        )
+
+    pub fn output_norm(&self, queue: &QueueOf<W::Hardware>) -> [Tensor<W::Memory<'_>>; 2] {
+        let [w, b] = self.weights.output_norm(queue);
+        [
+            self.output_norm_w.clone().map(|_| w),
+            self.output_norm_b.clone().map(|_| b),
+        ]
     }
-    #[inline]
-    pub fn ffn_down_weight_bias(
-        &self,
-        iblk: usize,
-        queue: &QueueOf<W::Hardware>,
-    ) -> (Tensor<W::Memory<'_>>, Tensor<W::Memory<'_>>) {
-        (
-            self.ffn_down_weight
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::FfnDownw, iblk, queue)),
-            self.ffn_down_bias
-                .clone()
-                .map(|_| self.weights.load_blk(BlkWeight::FfnDownb, iblk, queue)),
-        )
-    }
-    #[inline]
-    pub fn output_norm_weigh_bias(
-        &self,
-        queue: &QueueOf<W::Hardware>,
-    ) -> (Tensor<W::Memory<'_>>, Tensor<W::Memory<'_>>) {
-        (
-            self.output_norm_weight
-                .clone()
-                .map(|_| self.weights.output_norm_weight(queue)),
-            self.output_norm_bias
-                .clone()
-                .map(|_| self.weights.output_norm_bias(queue)),
-        )
-    }
-    #[inline]
+
     pub fn output_weight(&self, queue: &QueueOf<W::Hardware>) -> Tensor<W::Memory<'_>> {
         self.output_weight
             .clone()
             .map(|_| self.weights.output(queue))
     }
-    #[inline]
+
     pub fn pos_embd<'a>(&'a self, queue: &'a QueueOf<W::Hardware>) -> Tensor<W::Memory<'a>> {
         let pos_embd = self.weights.pos_embd(queue);
         self.pos_embd.clone().map(|_| pos_embd)

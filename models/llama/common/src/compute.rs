@@ -293,11 +293,11 @@ where
         assert_eq!(dst, logits.shape()[0]);
 
         let mut x = x.map_slice_mut().slice(0, 0, 1, dst);
-        let x_ = unsafe { x.map_slice_static() };
-        let w = self.weights.output_norm(queue);
-        self.rms_norm(&mut x, &x_, &w, workspace, queue_alloc)?;
-        drop(w);
-
+        {
+            let inplace = unsafe { x.map_slice_static() };
+            let w = self.weights.output_norm(queue);
+            self.rms_norm(&mut x, &inplace, &w, workspace, queue_alloc)?;
+        }
         let w = self.weights.output(queue);
         self.mat_mul(&mut logits, 0., &x, &w, 1., workspace, queue_alloc)
     }

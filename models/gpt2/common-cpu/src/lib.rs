@@ -11,10 +11,6 @@ use operators::{
 };
 use std::marker::PhantomData;
 use std::ops::Deref;
-use BlkWeight::{
-    AttnNormb, AttnNormw, AttnOb, AttnOw, AttnQKVb, AttnQKVw, FfnDownb, FfnDownw, FfnNormb,
-    FfnNormw, FfnUpb, FfnUpw,
-};
 
 pub struct Operators<N = Cpu, R = NonAllReduce<Cpu, Rearrange>>(PhantomData<(N, R)>);
 
@@ -22,8 +18,8 @@ pub type RandomSample = gpt2::RandomSample<Cpu, RandomSampleCpu>;
 
 pub struct Weights<'w> {
     blks: Box<[BlkStorage<&'w [u8]>]>,
-    output_norm_weight: &'w [u8],
-    output_norm_bias: &'w [u8],
+    output_norm_w: &'w [u8],
+    output_norm_b: &'w [u8],
     output: &'w [u8],
     pos_embd: &'w [u8],
 }
@@ -59,8 +55,8 @@ where
 impl<'w> Weights<'w> {
     pub fn new(model: &'w Storage<&'w [u8]>) -> Self {
         let Storage {
-            output_norm_weight,
-            output_norm_bias,
+            output_norm_w,
+            output_norm_b,
             output,
             blocks,
             pos_embd,
@@ -70,8 +66,8 @@ impl<'w> Weights<'w> {
         Self {
             pos_embd,
             blks: blocks.clone(),
-            output_norm_weight,
-            output_norm_bias,
+            output_norm_w,
+            output_norm_b,
             output,
         }
     }
@@ -84,54 +80,40 @@ impl WeightLoader for Weights<'_> {
     where
         Self: 's;
 
-    #[inline]
     fn load_blk(
         &self,
         which: BlkWeight,
         iblk: usize,
         _queue: &QueueOf<Self::Hardware>,
-    ) -> Self::Memory<'_> {
+    ) -> [Self::Memory<'_>; 2] {
         let BlkStorage {
-            attn_norm_weight,
-            attn_norm_bias,
-            attn_qkv_weight,
-            attn_qkv_bias,
-            attn_output_weight,
-            attn_output_bias,
+            attn_norm_w,
+            attn_norm_b,
+            attn_qkv_w,
+            attn_qkv_b,
+            attn_o_w,
+            attn_o_b,
 
-            ffn_norm_weight,
-            ffn_norm_bias,
-            ffn_up_weight,
-            ffn_up_bias,
-            ffn_down_weight,
-            ffn_down_bias,
+            ffn_norm_w,
+            ffn_norm_b,
+            ffn_up_w,
+            ffn_up_b,
+            ffn_down_w,
+            ffn_down_b,
         } = &self.blks[iblk];
 
         match which {
-            AttnNormw => attn_norm_weight,
-            AttnNormb => attn_norm_bias,
-            AttnQKVw => attn_qkv_weight,
-            AttnQKVb => attn_qkv_bias,
-            AttnOw => attn_output_weight,
-            AttnOb => attn_output_bias,
-
-            FfnNormw => ffn_norm_weight,
-            FfnNormb => ffn_norm_bias,
-            FfnUpw => ffn_up_weight,
-            FfnUpb => ffn_up_bias,
-            FfnDownw => ffn_down_weight,
-            FfnDownb => ffn_down_bias,
+            BlkWeight::AttnNorm => [attn_norm_w, attn_norm_b],
+            BlkWeight::AttnQKV => [attn_qkv_w, attn_qkv_b],
+            BlkWeight::AttnO => [attn_o_w, attn_o_b],
+            BlkWeight::FfnNorm => [ffn_norm_w, ffn_norm_b],
+            BlkWeight::FfnUp => [ffn_up_w, ffn_up_b],
+            BlkWeight::FfnDown => [ffn_down_w, ffn_down_b],
         }
     }
-
     #[inline]
-    fn output_norm_weight(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_> {
-        self.output_norm_weight
-    }
-
-    #[inline]
-    fn output_norm_bias(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_> {
-        self.output_norm_bias
+    fn output_norm(&self, _queue: &QueueOf<Self::Hardware>) -> [Self::Memory<'_>; 2] {
+        [self.output_norm_w, self.output_norm_b]
     }
     #[inline]
     fn output(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Memory<'_> {

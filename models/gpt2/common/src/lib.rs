@@ -85,59 +85,59 @@ impl Gpt2Meta {
         self.embd(self.nctx)
     }
     // ln1_weight
-    pub fn attn_norm_weight(&self) -> Tensor<usize> {
+    pub fn attn_norm_w(&self) -> Tensor<usize> {
         self.norm()
     }
     // ln1_bias
-    pub fn attn_norm_bias(&self) -> Tensor<usize> {
+    pub fn attn_norm_b(&self) -> Tensor<usize> {
         self.norm()
     }
     // attn_qkvw
-    pub fn attn_qkv_weight(&self, usage: TensorUsage) -> Tensor<usize> {
+    pub fn attn_qkv_w(&self, usage: TensorUsage) -> Tensor<usize> {
         self.mat(3 * self.d, self.d, usage)
     }
     // attn_qkvb
-    pub fn attn_qkv_bias(&self) -> Tensor<usize> {
+    pub fn attn_qkv_b(&self) -> Tensor<usize> {
         Tensor::new(self.dt_embd, &[3 * self.d])
     }
     // attn_projw
-    pub fn attn_o_weight(&self, usage: TensorUsage) -> Tensor<usize> {
+    pub fn attn_o_w(&self, usage: TensorUsage) -> Tensor<usize> {
         self.mat(self.d, self.d, usage)
     }
     // attn_projb
-    pub fn attn_o_bias(&self) -> Tensor<usize> {
+    pub fn attn_o_b(&self) -> Tensor<usize> {
         Tensor::new(self.dt_embd, &[self.d])
     }
     // ln2_weight
-    pub fn ffn_norm_weight(&self) -> Tensor<usize> {
+    pub fn ffn_norm_w(&self) -> Tensor<usize> {
         self.norm()
     }
     // ln2_bias
-    pub fn ffn_norm_bias(&self) -> Tensor<usize> {
+    pub fn ffn_norm_b(&self) -> Tensor<usize> {
         self.norm()
     }
     // fcw
-    pub fn ffn_up_weight(&self, usage: TensorUsage) -> Tensor<usize> {
+    pub fn ffn_up_w(&self, usage: TensorUsage) -> Tensor<usize> {
         self.mat(4 * self.d, self.d, usage)
     }
     // fcb
-    pub fn ffn_up_bias(&self) -> Tensor<usize> {
+    pub fn ffn_up_b(&self) -> Tensor<usize> {
         Tensor::new(self.dt_embd, &[4 * self.d])
     }
     // fcprojw
-    pub fn ffn_down_weight(&self, usage: TensorUsage) -> Tensor<usize> {
+    pub fn ffn_down_w(&self, usage: TensorUsage) -> Tensor<usize> {
         self.mat(self.d, 4 * self.d, usage)
     }
     // fcprojb
-    pub fn ffn_down_bias(&self) -> Tensor<usize> {
+    pub fn ffn_down_b(&self) -> Tensor<usize> {
         Tensor::new(self.dt_embd, &[self.d])
     }
     // lnfw
-    pub fn output_norm_weight(&self) -> Tensor<usize> {
+    pub fn output_norm_w(&self) -> Tensor<usize> {
         self.norm()
     }
     // lnfb
-    pub fn output_norm_bias(&self) -> Tensor<usize> {
+    pub fn output_norm_b(&self) -> Tensor<usize> {
         self.norm()
     }
     // output.weight
