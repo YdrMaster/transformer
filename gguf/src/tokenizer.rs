@@ -196,7 +196,7 @@ impl SpaceDetective {
             .unwrap()
             .c;
         let en = match replace {
-            SPACE => HashMap::new(),
+            SPACE => HashMap::from([(SPACE, SPACE)]),
             SPACE_ => HashMap::from([(SPACE, SPACE_)]),
             SPACEG => HashMap::from([(SPACE, SPACEG), ('\n', 'Ċ')]),
             _ => unreachable!(),

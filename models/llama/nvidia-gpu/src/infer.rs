@@ -17,6 +17,7 @@ type Worker<'w> = LlamaWorker<Operators, Weights<'w>>;
 fn test_infer() {
     let Some(Inference {
         model,
+        devices,
         prompt,
         as_user,
         temperature,
@@ -42,11 +43,14 @@ fn test_infer() {
     let sample_args = SampleArgs::new(temperature, top_p, top_k).expect("invalid sample args");
     println!("{sample_args:?}");
 
+    let device = devices.map_or(0, |devices| devices.parse().unwrap());
+    println!("using gpu{device}");
+
     let roll_cache_size = load_roll_cache_size();
     println!("roll_cache_size: {roll_cache_size}");
 
     let gpu = match cuda::init() {
-        Ok(()) => Device::new(0),
+        Ok(()) => Device::new(device),
         Err(NoDevice) => return,
     };
     let gpu = Gpu::new(gpu.context(), Config::default());
