@@ -127,16 +127,13 @@ pub fn test_infer(
     mut lm: impl FnMut(&[utok], usize) -> utok,
 ) {
     use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
-    macro_rules! print_now {
-        ($($arg:tt)*) => {{
-            use std::io::Write;
+    let use_kv_cache = var("USE_KV_CACHE").map_or(false, |s| match s.as_str() {
+        "y" => true,
+        "n" => false,
+        _ => panic!(),
+    });
 
-            print!($($arg)*);
-            std::io::stdout().flush().unwrap();
-        }};
-    }
-
-    print_now!("{prompt}");
+    println!("{prompt}");
 
     let mut tokens = tokenizer.encode(prompt);
     let num_prompt_tokens = tokens.len();
@@ -147,7 +144,7 @@ pub fn test_infer(
     let mut pos = 0;
     for _ in 0..max_steps {
         let time = Instant::now();
-        let next = lm(&tokens, pos);
+        let next = lm(&tokens, if use_kv_cache { pos } else { 0 });
         let time = time.elapsed();
 
         if prefill.is_zero() {
@@ -162,8 +159,13 @@ pub fn test_infer(
         }
 
         let piece = tokenizer.decode(next);
-        print_now!("{piece}");
-        tokens = vec![next];
+        let debug = format!("{piece:?}");
+        println!("out = {debug:<16} {time:?}");
+        if use_kv_cache {
+            tokens = vec![next]
+        } else {
+            tokens.push(next)
+        }
     }
 
     let table = [
