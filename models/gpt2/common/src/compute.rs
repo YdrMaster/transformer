@@ -23,6 +23,7 @@ pub trait Operators {
     type AllReduce: AllReduce<Self::Hardware, Self::TopoNode>;
     type AddRows: AddRows<Self::Hardware>;
     type Mlp: Gpt2Mlp<Self::Hardware>;
+
     fn debug<T>(tensor: &Tensor<T>)
     where
         T: Deref<Target = [ByteOf<Self::Hardware>]>;
@@ -66,6 +67,7 @@ pub struct Gpt2Worker<Ops: Operators, W> {
     all_reduce: Ops::AllReduce,
     add_rows: Ops::AddRows,
     mlp: Ops::Mlp,
+    pub debug: bool,
 }
 
 impl<Ops: Operators, W> Gpt2Worker<Ops, W> {
@@ -81,6 +83,7 @@ impl<Ops: Operators, W> Gpt2Worker<Ops, W> {
             all_reduce: Ops::AllReduce::new(node),
             add_rows: Ops::AddRows::new(processor),
             mlp: Ops::Mlp::new(processor),
+            debug: true,
         }
     }
 
@@ -136,7 +139,6 @@ where
             idx,
             idx_add,
         } = args;
-
         let Gpt2Meta {
             dt_embd,
             nblk,
@@ -145,6 +147,7 @@ where
             dh,
             ..
         } = self.meta;
+
         let workspace_size = self.workspace_size(nt, max_seq_len, max_att_len);
         let mut workspace = Workspace::new(queue_alloc, workspace, workspace_size);
         let queue = queue_alloc.queue();
@@ -161,7 +164,7 @@ where
             token_embd = token_embd.merge(0..2).unwrap();
         }
         let mut x = token_embd;
-        let x1 = Tensor::new(dt_embd, x.shape());
+        let x1 = Tensor::new(x.dt(), x.shape());
         let (buf, workspace) = workspace.split_at_mut(*x1.get());
         let mut x1 = x1.map(|_| buf);
         let qkv = Tensor::new(dt_embd, &[nt, (nh + nkvh + nkvh) * dh]);
@@ -177,10 +180,9 @@ where
             let mut qkv = qkv.clone().map(|_| buf);
             {
                 let [scale, bias] = self.weights.attn_qkv(iblk, queue);
-                let cols = bias.shape()[0];
-                let bias = bias.tile(0, &[1, cols]).broadcast(0, nt);
+                let bias = bias.broadcast(0, nt);
                 self.rearrange(&mut qkv, &bias, workspace, queue_alloc)?;
-                self.mat_mul(&mut qkv, 1., &x1, &scale, 1., workspace, queue_alloc)?;
+                self.mat_mul(&mut qkv, 1., &x1, &scale, 1., workspace, queue_alloc)?
             }
             let qkv = qkv.tile(1, &[nh + nkvh + nkvh, dh]);
             split!(qkv => q, k, v; [nh, nkvh, nkvh] @ 1);
@@ -215,14 +217,13 @@ where
                         req.pos,
                         workspace,
                         queue_alloc,
-                    )?;
+                    )?
                 }
             }
             {
                 let o = q.map_slice().merge(1..3).unwrap();
                 let [scale, bias] = self.weights.attn_o(iblk, queue);
-                let cols = bias.shape()[0];
-                let bias = bias.tile(0, &[1, cols]).broadcast(0, nt);
+                let bias = bias.broadcast(0, nt);
                 self.rearrange(&mut x1, &bias, workspace, queue_alloc)?;
                 self.mat_mul(&mut x1, 1., &o, &scale, 1., workspace, queue_alloc)?;
             }
@@ -506,24 +507,19 @@ where
 }
 
 struct WeightDecorator<W> {
-    attn_norm_w: Tensor<usize>,
-    attn_norm_b: Tensor<usize>,
+    pos_embd: Tensor<usize>,
+    output_weight: Tensor<usize>,
+    norm: Tensor<usize>,
+
     attn_qkv_w: Tensor<usize>,
     attn_qkv_b: Tensor<usize>,
     attn_o_w: Tensor<usize>,
     attn_o_b: Tensor<usize>,
 
-    ffn_norm_w: Tensor<usize>,
-    ffn_norm_b: Tensor<usize>,
     ffn_up_w: Tensor<usize>,
     ffn_up_b: Tensor<usize>,
     ffn_down_w: Tensor<usize>,
     ffn_down_b: Tensor<usize>,
-
-    output_norm_w: Tensor<usize>,
-    output_norm_b: Tensor<usize>,
-    output_weight: Tensor<usize>,
-    pos_embd: Tensor<usize>,
 
     weights: W,
 }
@@ -532,24 +528,19 @@ impl Gpt2Meta {
     fn decorator<W>(&self, weights: W) -> WeightDecorator<W> {
         use crate::TensorUsage::Computation;
         WeightDecorator {
-            attn_norm_w: self.attn_norm_w(),
-            attn_norm_b: self.attn_norm_b(),
-            attn_qkv_w: self.attn_qkv_w(Computation),
-            attn_qkv_b: self.attn_qkv_b(),
-            attn_o_w: self.attn_o_w(Computation),
-            attn_o_b: self.attn_o_b(),
-
-            ffn_norm_w: self.ffn_norm_w(),
-            ffn_norm_b: self.ffn_norm_b(),
-            ffn_up_w: self.ffn_up_w(Computation),
-            ffn_up_b: self.ffn_up_b(),
-            ffn_down_w: self.ffn_down_w(Computation),
-            ffn_down_b: self.ffn_down_b(),
-
-            output_norm_w: self.output_norm_w(),
-            output_norm_b: self.output_norm_b(),
-            output_weight: self.output_weight(),
             pos_embd: self.pos_embd(),
+            output_weight: self.output_weight(),
+            norm: self.norm(),
+
+            attn_qkv_w: self.attn_qkv_w(Computation),
+            attn_qkv_b: self.attn_qkv_b(Computation),
+            attn_o_w: self.attn_o_w(Computation),
+            attn_o_b: self.attn_o_b(Computation),
+
+            ffn_up_w: self.ffn_up_w(Computation),
+            ffn_up_b: self.ffn_up_b(Computation),
+            ffn_down_w: self.ffn_down_w(Computation),
+            ffn_down_b: self.ffn_down_b(Computation),
 
             weights,
         }
@@ -563,10 +554,7 @@ impl<W: WeightLoader> WeightDecorator<W> {
         queue: &QueueOf<W::Hardware>,
     ) -> [Tensor<W::Memory<'_>>; 2] {
         let [w, b] = self.weights.load_blk(BlkWeight::AttnNorm, iblk, queue);
-        [
-            self.attn_norm_w.clone().map(|_| w),
-            self.attn_norm_b.clone().map(|_| b),
-        ]
+        [self.norm.clone().map(|_| w), self.norm.clone().map(|_| b)]
     }
 
     pub fn attn_qkv(
@@ -595,10 +583,7 @@ impl<W: WeightLoader> WeightDecorator<W> {
         queue: &QueueOf<W::Hardware>,
     ) -> [Tensor<W::Memory<'_>>; 2] {
         let [w, b] = self.weights.load_blk(BlkWeight::FfnNorm, iblk, queue);
-        [
-            self.ffn_norm_w.clone().map(|_| w),
-            self.ffn_norm_b.clone().map(|_| b),
-        ]
+        [self.norm.clone().map(|_| w), self.norm.clone().map(|_| b)]
     }
 
     pub fn ffn_up(&self, iblk: usize, queue: &QueueOf<W::Hardware>) -> [Tensor<W::Memory<'_>>; 2] {
@@ -623,10 +608,7 @@ impl<W: WeightLoader> WeightDecorator<W> {
 
     pub fn output_norm(&self, queue: &QueueOf<W::Hardware>) -> [Tensor<W::Memory<'_>>; 2] {
         let [w, b] = self.weights.output_norm(queue);
-        [
-            self.output_norm_w.clone().map(|_| w),
-            self.output_norm_b.clone().map(|_| b),
-        ]
+        [self.norm.clone().map(|_| w), self.norm.clone().map(|_| b)]
     }
 
     pub fn output_weight(&self, queue: &QueueOf<W::Hardware>) -> Tensor<W::Memory<'_>> {

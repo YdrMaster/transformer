@@ -60,19 +60,19 @@ impl<'a> Storage<&'a [u8]> {
         #[rustfmt::skip]
         let blocks = (0..meta.nblk)
             .map(|i| BlkStorage {
-                attn_qkv_b:      gguf.tensors[&*format!("blk.{i}.attn_qkv.bias"     )].data,
-                attn_qkv_w:    gguf.tensors[&*format!("blk.{i}.attn_qkv.weight"   )].data,
-                attn_o_b:   gguf.tensors[&*format!("blk.{i}.attn_output.bias"  )].data,
-                attn_o_w: gguf.tensors[&*format!("blk.{i}.attn_output.weight")].data,
-                attn_norm_b:     gguf.tensors[&*format!("blk.{i}.attn_norm.bias"    )].data,
-                attn_norm_w:   gguf.tensors[&*format!("blk.{i}.attn_norm.weight"  )].data,
+                attn_norm_w: gguf.tensors[&*format!("blk.{i}.attn_norm.weight"  )].data,
+                attn_norm_b: gguf.tensors[&*format!("blk.{i}.attn_norm.bias"    )].data,
+                attn_qkv_w:  gguf.tensors[&*format!("blk.{i}.attn_qkv.weight"   )].data,
+                attn_qkv_b:  gguf.tensors[&*format!("blk.{i}.attn_qkv.bias"     )].data,
+                attn_o_w:    gguf.tensors[&*format!("blk.{i}.attn_output.weight")].data,
+                attn_o_b:    gguf.tensors[&*format!("blk.{i}.attn_output.bias"  )].data,
 
-                ffn_up_b:        gguf.tensors[&*format!("blk.{i}.ffn_up.bias"       )].data,
-                ffn_up_w:      gguf.tensors[&*format!("blk.{i}.ffn_up.weight"     )].data,
-                ffn_down_b:      gguf.tensors[&*format!("blk.{i}.ffn_down.bias"     )].data,
-                ffn_down_w:    gguf.tensors[&*format!("blk.{i}.ffn_down.weight"   )].data,
-                ffn_norm_b:      gguf.tensors[&*format!("blk.{i}.ffn_norm.bias"     )].data,
-                ffn_norm_w:    gguf.tensors[&*format!("blk.{i}.ffn_norm.weight"   )].data,
+                ffn_norm_w:  gguf.tensors[&*format!("blk.{i}.ffn_norm.weight"   )].data,
+                ffn_norm_b:  gguf.tensors[&*format!("blk.{i}.ffn_norm.bias"     )].data,
+                ffn_up_w:    gguf.tensors[&*format!("blk.{i}.ffn_up.weight"     )].data,
+                ffn_up_b:    gguf.tensors[&*format!("blk.{i}.ffn_up.bias"       )].data,
+                ffn_down_w:  gguf.tensors[&*format!("blk.{i}.ffn_down.weight"   )].data,
+                ffn_down_b:  gguf.tensors[&*format!("blk.{i}.ffn_down.bias"     )].data,
             })
             .collect();
 

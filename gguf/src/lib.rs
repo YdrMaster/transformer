@@ -57,7 +57,6 @@ pub struct GGufModel<'a> {
 
 /// GGuf 张量。
 #[derive(Clone, Debug)]
-#[allow(missing_docs)]
 pub struct GGufTensor<'a> {
     pub ty: DigitLayout,
     pub shape: Box<[usize]>,

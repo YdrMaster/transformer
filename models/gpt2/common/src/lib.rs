@@ -84,71 +84,54 @@ impl Gpt2Meta {
     pub fn position_embd(&self) -> Tensor<usize> {
         self.embd(self.nctx)
     }
-    // ln1_weight
-    pub fn attn_norm_w(&self) -> Tensor<usize> {
-        self.norm()
-    }
-    // ln1_bias
-    pub fn attn_norm_b(&self) -> Tensor<usize> {
-        self.norm()
-    }
-    // attn_qkvw
+
     pub fn attn_qkv_w(&self, usage: TensorUsage) -> Tensor<usize> {
-        self.mat(3 * self.d, self.d, usage)
+        let &Self { d, .. } = self;
+        self.mat(3 * d, d, usage)
     }
-    // attn_qkvb
-    pub fn attn_qkv_b(&self) -> Tensor<usize> {
-        Tensor::new(self.dt_embd, &[3 * self.d])
+
+    pub fn attn_qkv_b(&self, usage: TensorUsage) -> Tensor<usize> {
+        let &Self { d, .. } = self;
+        self.mat(3 * d, 1, usage)
     }
-    // attn_projw
+
     pub fn attn_o_w(&self, usage: TensorUsage) -> Tensor<usize> {
-        self.mat(self.d, self.d, usage)
+        let &Self { d, .. } = self;
+        self.mat(d, d, usage)
     }
-    // attn_projb
-    pub fn attn_o_b(&self) -> Tensor<usize> {
-        Tensor::new(self.dt_embd, &[self.d])
+
+    pub fn attn_o_b(&self, usage: TensorUsage) -> Tensor<usize> {
+        let &Self { d, .. } = self;
+        self.mat(d, 1, usage)
     }
-    // ln2_weight
-    pub fn ffn_norm_w(&self) -> Tensor<usize> {
-        self.norm()
-    }
-    // ln2_bias
-    pub fn ffn_norm_b(&self) -> Tensor<usize> {
-        self.norm()
-    }
-    // fcw
+
     pub fn ffn_up_w(&self, usage: TensorUsage) -> Tensor<usize> {
-        self.mat(4 * self.d, self.d, usage)
+        let &Self { d, di, .. } = self;
+        self.mat(di, d, usage)
     }
-    // fcb
-    pub fn ffn_up_b(&self) -> Tensor<usize> {
-        Tensor::new(self.dt_embd, &[4 * self.d])
+
+    pub fn ffn_up_b(&self, _usage: TensorUsage) -> Tensor<usize> {
+        Tensor::new(self.dt_embd, &[self.di])
     }
-    // fcprojw
+
     pub fn ffn_down_w(&self, usage: TensorUsage) -> Tensor<usize> {
-        self.mat(self.d, 4 * self.d, usage)
+        let &Self { d, di, .. } = self;
+        self.mat(d, di, usage)
     }
-    // fcprojb
-    pub fn ffn_down_b(&self) -> Tensor<usize> {
+
+    pub fn ffn_down_b(&self, _usage: TensorUsage) -> Tensor<usize> {
         Tensor::new(self.dt_embd, &[self.d])
     }
-    // lnfw
-    pub fn output_norm_w(&self) -> Tensor<usize> {
-        self.norm()
-    }
-    // lnfb
-    pub fn output_norm_b(&self) -> Tensor<usize> {
-        self.norm()
-    }
-    // output.weight
+
     pub fn output_weight(&self) -> Tensor<usize> {
         Tensor::new(self.dt_embd, &[self.nvoc, self.d])
     }
 
-    fn norm(&self) -> Tensor<usize> {
+    pub fn norm(&self) -> Tensor<usize> {
         let &Self { dt_norm, d, .. } = self;
         Tensor::new(dt_norm, &[d])
     }
+
     pub fn pos_embd(&self) -> Tensor<usize> {
         let &Self { nvoc, d, .. } = self;
         Tensor::new(self.dt_embd, &[nvoc, d])
