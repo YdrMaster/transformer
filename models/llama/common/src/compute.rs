@@ -195,7 +195,6 @@ where
             nh,
             nkvh,
             nexp,
-            nexp_use,
             dh,
             di,
             ..
@@ -230,6 +229,7 @@ where
         });
 
         let req_split = requests.iter().map(|req| req.seq_len).collect::<Vec<_>>();
+        let tok_split = vec![1; nt];
 
         let queue = queue_alloc.queue();
         for iblk in 0..nblk {
@@ -324,38 +324,19 @@ where
 
                     Ops::memcpy_d2h(&mut routes_host, routes_dev.get(), queue)
                 }
-                let ([], routes, []) = (unsafe { routes_host.align_to_mut::<f16>() }) else {
+                let ([], mut routes, []) = (unsafe { routes_host.align_to::<f16>() }) else {
                     unreachable!()
                 };
 
-                for itok in (0..nt).rev() {
-                    // fused topk
-                    let mut routes = routes[itok * nexp..][..nexp]
-                        .iter()
-                        .copied()
-                        .enumerate()
-                        .collect::<Vec<_>>();
+                let (buf, workspace) = workspace.split_at_mut(*gate_up.get());
+                let mut gate_up = gate_up.clone().map(|_| buf);
 
-                    routes.sort_unstable_by(|&(_, a), &(_, b)| b.total_cmp(&a));
-                    let max = routes[0].1.to_f32();
-                    let mut sum = 0.;
-                    let mut moe_gate = vec![(0, 0.0f32); nexp_use];
-                    for ((i, x), gate) in std::iter::zip(routes, &mut moe_gate) {
-                        let softmax = (x.to_f32() - max).exp();
-                        *gate = (i, softmax);
-                        sum += softmax
-                    }
-                    for (_, x) in &mut moe_gate {
-                        *x /= sum
-                    }
-                    // mlp
-                    let (buf, workspace) = workspace.split_at_mut(*gate_up.get());
-                    let mut gate_up = gate_up.clone().map(|_| buf);
-
-                    let mut x = x.map_slice_mut().slice(0, itok, 0, 1);
-                    let x1 = x1.map_slice_mut().slice(0, itok, 0, 1);
-
-                    for (iexp, kexp) in moe_gate {
+                let x = x.split(0, &tok_split);
+                let x1 = x1.split(0, &tok_split);
+                for (mut x, x1) in izip!(x, x1) {
+                    let (line, tail) = routes.split_at(nexp);
+                    routes = tail;
+                    for (iexp, kexp) in self.topk_with_index(line) {
                         let w = self.weights.ffn_gate_up(iblk, iexp, queue);
                         self.mat_mul(&mut gate_up, 0., &x1, &w, 1., workspace, queue_alloc)?;
                         drop(w);
@@ -409,6 +390,27 @@ where
     Ops: Operators,
     W: WeightLoader<Hardware = Ops::Hardware>,
 {
+    fn topk_with_index(&self, line: &[f16]) -> Vec<(usize, f32)> {
+        let mut routes = line
+            .iter()
+            .map(|&x| x.to_f32())
+            .enumerate()
+            .collect::<Vec<_>>();
+        routes.sort_unstable_by(|&(_, a), &(_, b)| b.total_cmp(&a));
+        routes.truncate(self.meta.nexp_use);
+        // standard softmax
+        let (_, max) = routes[0];
+        let mut sum = 0.;
+        for (_, x) in &mut routes {
+            *x = (*x - max).exp();
+            sum += *x
+        }
+        for (_, x) in &mut routes {
+            *x /= sum
+        }
+        routes
+    }
+
     fn rms_norm<Y, X, W_, QA>(
         &self,
         y: &mut Tensor<Y>,

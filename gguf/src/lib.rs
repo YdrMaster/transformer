@@ -130,3 +130,25 @@ impl GGufMetaMap for GGufModel<'_> {
         self.meta_kvs.get(key).map(|kv| (kv.ty(), kv.value_bytes()))
     }
 }
+
+mod macros {
+    #[macro_export]
+    macro_rules! meta {
+        ($gguf:expr => $key:ident) => {
+            $gguf.$key().unwrap()
+        };
+        ($gguf:expr => $key:ident; $default:expr) => {
+            match $gguf.$key() {
+                Ok(val) => val,
+                Err(gguf::GGufMetaError::NotExist) => $default,
+                Err(e) => panic!("failed to read meta: {e:?}"),
+            }
+        };
+    }
+    #[macro_export]
+    macro_rules! tensor {
+        ($gguf:expr => $name:expr) => {
+            &$gguf.tensors[&*$name]
+        };
+    }
+}

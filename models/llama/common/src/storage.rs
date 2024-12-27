@@ -26,61 +26,44 @@ pub struct BlkStorage<T> {
 
 impl<'a> Storage<&'a [u8]> {
     pub fn from_gguf(gguf: &GGufModel<'a>) -> Self {
-        macro_rules! meta {
-            ($key:ident) => {
-                gguf.$key().unwrap()
-            };
-            ($key:ident; $default:expr) => {
-                match gguf.$key() {
-                    Ok(val) => val,
-                    Err(gguf::GGufMetaError::NotExist) => $default,
-                    Err(e) => panic!("failed to read meta: {e:?}"),
-                }
-            };
-        }
-        macro_rules! tensor {
-            ($name:expr) => {
-                &gguf.tensors[&*$name]
-            };
-        }
-
-        let token_embd = tensor!["token_embd.weight"];
-        let output_norm = tensor!["output_norm.weight"];
-        let qkv0 = tensor!["blk.0.attn_qkv.weight"];
+        use gguf::{meta, tensor};
+        let token_embd = tensor![gguf => "token_embd.weight"];
+        let output_norm = tensor![gguf => "output_norm.weight"];
+        let qkv0 = tensor![gguf => "blk.0.attn_qkv.weight"];
         #[rustfmt::skip]
         let meta = LlamaMeta {
             dt_embd :  token_embd.ty,
             dt_norm : output_norm.ty,
             dt_mat  :        qkv0.ty,
 
-            nblk    : meta!(llm_block_count            ),
-            nctx    : meta!(llm_context_length         ),
-            nvoc    : meta!(tokenizer_ggml_tokens).len(),
-            nh      : meta!(llm_attention_head_count   ),
-            nkvh    : meta!(llm_attention_head_count_kv),
-            nexp    : meta!(llm_expert_count        ; 0),
-            nexp_use: meta!(llm_expert_used_count   ; 0),
-            d       : meta!(llm_embedding_length       ),
-            dh      : meta!(llm_rope_dimension_count   ),
-            di      : meta!(llm_feed_forward_length    ),
+            nblk    : meta!(gguf => llm_block_count            ),
+            nctx    : meta!(gguf => llm_context_length         ),
+            nvoc    : meta!(gguf => tokenizer_ggml_tokens).len(),
+            nh      : meta!(gguf => llm_attention_head_count   ),
+            nkvh    : meta!(gguf => llm_attention_head_count_kv),
+            nexp    : meta!(gguf => llm_expert_count        ; 0),
+            nexp_use: meta!(gguf => llm_expert_used_count   ; 0),
+            d       : meta!(gguf => llm_embedding_length       ),
+            dh      : meta!(gguf => llm_rope_dimension_count   ),
+            di      : meta!(gguf => llm_feed_forward_length    ),
 
-            epsilon : meta!(llm_attention_layer_norm_rms_epsilon; 1e-5),
-            theta   : meta!(llm_rope_freq_base                  ; 1e4 ),
+            epsilon : meta!(gguf => llm_attention_layer_norm_rms_epsilon; 1e-5),
+            theta   : meta!(gguf => llm_rope_freq_base                  ; 1e4 ),
         };
 
         #[rustfmt::skip]
         let blocks = (0..meta.nblk)
             .map(|i| BlkStorage {
-                attn_norm:   tensor![format!("blk.{i}.attn_norm.weight"  )].data,
-                attn_qkv:    tensor![format!("blk.{i}.attn_qkv.weight"   )].data,
-                attn_o:      tensor![format!("blk.{i}.attn_output.weight")].data,
-                ffn_norm:    tensor![format!("blk.{i}.ffn_norm.weight"   )].data,
+                attn_norm: tensor![gguf => format!("blk.{i}.attn_norm.weight"  )].data,
+                attn_qkv:  tensor![gguf => format!("blk.{i}.attn_qkv.weight"   )].data,
+                attn_o:    tensor![gguf => format!("blk.{i}.attn_output.weight")].data,
+                ffn_norm:  tensor![gguf => format!("blk.{i}.ffn_norm.weight"   )].data,
                 ffn_gate_inp: if !meta.is_moe() { None }
-                              else              { Some(tensor![format!("blk.{i}.ffn_gate_inp.weight"    )].data) },
-                ffn_gate_up : if !meta.is_moe() {      tensor![format!("blk.{i}.ffn_gate_up.weight"     )].data  }
-                              else              {      tensor![format!("blk.{i}.ffn_gate_up_exps.weight")].data  },
-                ffn_down    : if !meta.is_moe() {      tensor![format!("blk.{i}.ffn_down.weight"        )].data  }
-                              else              {      tensor![format!("blk.{i}.ffn_down_exps.weight"   )].data  },
+                              else              { Some(tensor![gguf => format!("blk.{i}.ffn_gate_inp.weight"    )].data) },
+                ffn_gate_up : if !meta.is_moe() {      tensor![gguf => format!("blk.{i}.ffn_gate_up.weight"     )].data  }
+                              else              {      tensor![gguf => format!("blk.{i}.ffn_gate_up_exps.weight")].data  },
+                ffn_down    : if !meta.is_moe() {      tensor![gguf => format!("blk.{i}.ffn_down.weight"        )].data  }
+                              else              {      tensor![gguf => format!("blk.{i}.ffn_down_exps.weight"   )].data  },
             })
             .collect();
 
