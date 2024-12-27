@@ -56,7 +56,15 @@ where
             queue.synchronize();
             host
         });
-        println!("{tensor}");
+        println!("{tensor}")
+    }
+
+    fn memcpy_d2h<T: Copy>(
+        dst: &mut [T],
+        src: &[ByteOf<Self::Hardware>],
+        queue: &QueueOf<Self::Hardware>,
+    ) {
+        queue.get_device().memcpy_d2h(dst, src)
     }
 }
 
@@ -81,17 +89,18 @@ impl Weights {
                         blk.as_ref().map(|s| H2DLoader::new(s.len(), stream))
                     });
                     macro_rules! load {
-                            ($( $ident:ident )+ ) => {
-                                LlamaBlkStorage{
-                                    $( $ident: loader.$ident.load(blk.$ident, stream) ),+
-                                }
-                            };
-                        }
+                        ($( $ident:ident )+ ) => {
+                            LlamaBlkStorage{
+                                $( $ident: loader.$ident.load(blk.$ident, stream) ),+
+                            }
+                        };
+                    }
                     load! {
                         attn_norm
                         attn_qkv
                         attn_o
                         ffn_norm
+                        ffn_gate_inp
                         ffn_gate_up
                         ffn_down
                     }
@@ -154,9 +163,22 @@ impl WeightLoader for Weights {
             BlkWeight::AttnQKV => &blk.attn_qkv,
             BlkWeight::AttnO => &blk.attn_o,
             BlkWeight::FfnNorm => &blk.ffn_norm,
-            BlkWeight::FfnGateInp => blk.ffn_gate_inp.as_ref().unwrap(),
+            BlkWeight::FfnGateInp => &blk.ffn_gate_inp,
             BlkWeight::FfnGateUp => &blk.ffn_gate_up,
             BlkWeight::FfnDown => &blk.ffn_down,
+        }
+    }
+
+    fn load_moe<'a>(
+        &'a self,
+        which: BlkWeight,
+        _iblk: usize,
+        _iexp: usize,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> Self::Weight<'a> {
+        match which {
+            BlkWeight::FfnGateUp | BlkWeight::FfnDown => todo!(),
+            _ => unreachable!(),
         }
     }
 

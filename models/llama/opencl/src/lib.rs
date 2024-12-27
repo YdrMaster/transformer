@@ -13,6 +13,7 @@ use operators::{
 use std::{
     marker::PhantomData,
     ops::{Deref, RangeBounds},
+    ptr::copy_nonoverlapping,
 };
 
 pub struct Operators<N = ClDevice, R = NonAllReduce<ClDevice, Rearrange>>(PhantomData<(N, R)>);
@@ -49,7 +50,18 @@ where
     {
         let tensor = tensor.as_ref().map(|s| queue.map(s));
         println!("{tensor}");
-        queue.unmap(tensor.take());
+        queue.unmap(tensor.take())
+    }
+
+    fn memcpy_d2h<T: Copy>(
+        dst: &mut [T],
+        src: &[ByteOf<Self::Hardware>],
+        queue: &QueueOf<Self::Hardware>,
+    ) {
+        assert_eq!(size_of_val(dst), size_of_val(src));
+        let svm = queue.map(src);
+        unsafe { copy_nonoverlapping(svm.as_ptr(), dst.as_mut_ptr().cast::<u8>(), dst.len()) }
+        queue.unmap(svm)
     }
 }
 
@@ -119,6 +131,20 @@ impl WeightLoader for Weights {
             BlkWeight::FfnGateInp => blk.ffn_gate_inp.as_ref().unwrap(),
             BlkWeight::FfnGateUp => &blk.ffn_gate_up,
             BlkWeight::FfnDown => &blk.ffn_down,
+        }
+    }
+
+    fn load_moe<'a>(
+        &'a self,
+        which: BlkWeight,
+        iblk: usize,
+        _iexp: usize,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> Self::Weight<'a> {
+        let _blk = &self.0.blocks[iblk];
+        match which {
+            BlkWeight::FfnGateUp | BlkWeight::FfnDown => todo!(),
+            _ => unreachable!(),
         }
     }
 

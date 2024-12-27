@@ -95,7 +95,7 @@ fn test_infer() {
 
                         info!("worker[{id}] loading weights...");
                         let weights = Weights::new(model, range, count, usize::MAX, ctx);
-                        let mut worker = Worker::new(id, &node, meta.clone(), weights, id == 0);
+                        let mut worker = Worker::new(id, &node, meta.clone(), weights);
                         info!("worker[{id}] created");
                         let mut cache = meta
                             .kv_cache(meta.nctx)

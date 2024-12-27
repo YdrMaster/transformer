@@ -90,7 +90,7 @@ fn test_infer() {
                     let device = node.processor();
                     let stream = device.stream();
                     let weights = Weights::new(model, range, count, &stream);
-                    let mut worker = Worker::new(id, &node, meta.clone(), weights, id == 0);
+                    let mut worker = Worker::new(id, &node, meta.clone(), weights);
                     let mut cache = meta
                         .kv_cache(meta.nctx)
                         .map(|size| stream.malloc::<u8>(size));

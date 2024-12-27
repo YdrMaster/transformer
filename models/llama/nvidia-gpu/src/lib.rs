@@ -146,7 +146,15 @@ where
             memcpy_d2h(&mut host, s);
             host
         });
-        println!("{tensor}");
+        println!("{tensor}")
+    }
+
+    fn memcpy_d2h<T: Copy>(
+        dst: &mut [T],
+        src: &[ByteOf<Self::Hardware>],
+        _queue: &QueueOf<Self::Hardware>,
+    ) {
+        memcpy_d2h(dst, src)
     }
 }
 
@@ -238,6 +246,7 @@ impl<'blk> Weights<'blk> {
                     attn_qkv
                     attn_o
                     ffn_norm
+                    ffn_gate_inp
                     ffn_gate_up
                     ffn_down
                 }
@@ -310,7 +319,7 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
             BlkWeight::AttnQKV => &self.blks.attn_qkv,
             BlkWeight::AttnO => &self.blks.attn_o,
             BlkWeight::FfnNorm => &self.blks.ffn_norm,
-            BlkWeight::FfnGateInp => self.blks.ffn_gate_inp.as_ref().unwrap(),
+            BlkWeight::FfnGateInp => &self.blks.ffn_gate_inp,
             BlkWeight::FfnGateUp => &self.blks.ffn_gate_up,
             BlkWeight::FfnDown => &self.blks.ffn_down,
         };
@@ -328,6 +337,19 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
                     compute_stream: queue,
                 }
             }
+        }
+    }
+
+    fn load_moe<'a>(
+        &'a self,
+        which: BlkWeight,
+        _iblk: usize,
+        _iexp: usize,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> Self::Weight<'a> {
+        match which {
+            BlkWeight::FfnGateUp | BlkWeight::FfnDown => todo!(),
+            _ => unreachable!(),
         }
     }
 

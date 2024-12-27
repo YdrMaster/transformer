@@ -65,7 +65,7 @@ fn test_infer() {
     let queue = context.queue();
 
     let weights = Weights::new(&model, .., 1, &queue);
-    let mut worker = Worker::new(0, &cl_dev, model.meta.clone(), weights, true);
+    let mut worker = Worker::new(0, &cl_dev, model.meta.clone(), weights);
     let mut cache = model
         .meta
         .kv_cache(nctx)

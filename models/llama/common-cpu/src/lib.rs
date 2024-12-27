@@ -17,6 +17,7 @@ use std::{
     marker::PhantomData,
     mem::size_of,
     ops::{Deref, Range, RangeBounds},
+    ptr::copy_nonoverlapping,
     slice::{from_raw_parts, from_raw_parts_mut},
 };
 
@@ -69,7 +70,7 @@ where
     where
         T: Deref<Target = [ByteOf<Self::Hardware>]>,
     {
-        println!("{tensor}");
+        println!("{tensor}")
     }
 
     fn memcpy_d2h<T: Copy>(
@@ -79,7 +80,7 @@ where
     ) {
         let count = size_of_val(dst);
         assert_eq!(size_of_val(src), count);
-        unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr().cast::<u8>(), count) }
+        unsafe { copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr().cast::<u8>(), count) }
     }
 }
 
@@ -236,13 +237,13 @@ impl WeightLoader for Weights<'_> {
 
         #[rustfmt::skip]
         match which {
-            AttnNorm                        => return Borrowed(attn_norm  ),
-            AttnQKV    if dt_mat == dt_embd => return Borrowed(attn_qkv   ),
-            AttnO      if dt_mat == dt_embd => return Borrowed(attn_o     ),
-            FfnNorm                         => return Borrowed(ffn_norm   ),
-            FfnGateInp if dt_mat == dt_embd => return Borrowed(ffn_gate_inp.as_ref().unwrap()),
-            FfnGateUp  if dt_mat == dt_embd => return Borrowed(ffn_gate_up),
-            FfnDown    if dt_mat == dt_embd => return Borrowed(ffn_down   ),
+            AttnNorm                        => return Borrowed(attn_norm   ),
+            AttnQKV    if dt_mat == dt_embd => return Borrowed(attn_qkv    ),
+            AttnO      if dt_mat == dt_embd => return Borrowed(attn_o      ),
+            FfnNorm                         => return Borrowed(ffn_norm    ),
+            FfnGateInp if dt_mat == dt_embd => return Borrowed(ffn_gate_inp),
+            FfnGateUp  if dt_mat == dt_embd => return Borrowed(ffn_gate_up ),
+            FfnDown    if dt_mat == dt_embd => return Borrowed(ffn_down    ),
             _ => {}
         };
 
@@ -265,7 +266,7 @@ impl WeightLoader for Weights<'_> {
             match which {
                 AttnQKV => dequant(dt_mat, dt_embd, attn_qkv, &mut cache[..size_qkv]),
                 AttnO => dequant(dt_mat, dt_embd, attn_o, &mut cache[..size_o]),
-                FfnGateInp => todo!(),
+                FfnGateInp => todo!("dequant ffn gate inp"),
                 FfnGateUp | FfnDown => {
                     dequant(dt_mat, dt_embd, ffn_gate_up, &mut cache[..size_gate_up]);
                     dequant(
@@ -284,7 +285,7 @@ impl WeightLoader for Weights<'_> {
             match which {
                 AttnQKV => 0..size_qkv,
                 AttnO => 0..size_o,
-                FfnGateInp => todo!(),
+                FfnGateInp => todo!("dequant ffn gate inp"),
                 FfnGateUp => 0..size_gate_up,
                 FfnDown => size_gate_up..size_gate_up + size_down,
                 AttnNorm | FfnNorm => unreachable!(),

@@ -33,12 +33,10 @@ pub trait Operators {
         T: Deref<Target = [ByteOf<Self::Hardware>]>;
 
     fn memcpy_d2h<T: Copy>(
-        _dst: &mut [T],
-        _src: &[ByteOf<Self::Hardware>],
-        _queue: &QueueOf<Self::Hardware>,
-    ) {
-        todo!()
-    }
+        dst: &mut [T],
+        src: &[ByteOf<Self::Hardware>],
+        queue: &QueueOf<Self::Hardware>,
+    );
 
     fn build_sin_cos<QA>(
         dt: DigitLayout,
@@ -81,13 +79,11 @@ pub trait WeightLoader {
 
     fn load_moe<'a>(
         &'a self,
-        _which: BlkWeight,
-        _iblk: usize,
-        _iexp: usize,
-        _queue: &'a QueueOf<Self::Hardware>,
-    ) -> Self::Weight<'a> {
-        todo!()
-    }
+        which: BlkWeight,
+        iblk: usize,
+        iexp: usize,
+        queue: &'a QueueOf<Self::Hardware>,
+    ) -> Self::Weight<'a>;
 
     fn output_norm<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Weight<'a>;
     fn output<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Weight<'a>;
@@ -105,17 +101,10 @@ pub struct LlamaWorker<Ops: Operators, W> {
     swiglu: Ops::Swiglu,
     rearrange: Ops::Rearrange,
     all_reduce: Ops::AllReduce,
-    residual: bool,
 }
 
 impl<Ops: Operators, W> LlamaWorker<Ops, W> {
-    pub fn new(
-        id: usize,
-        node: &Ops::TopoNode,
-        meta: LlamaMeta,
-        weights: W,
-        residual: bool,
-    ) -> Self {
+    pub fn new(id: usize, node: &Ops::TopoNode, meta: LlamaMeta, weights: W) -> Self {
         let processor = node.processor();
         Self {
             id,
@@ -128,7 +117,6 @@ impl<Ops: Operators, W> LlamaWorker<Ops, W> {
             swiglu: Ops::Swiglu::new(processor),
             rearrange: Ops::Rearrange::new(processor),
             all_reduce: Ops::AllReduce::new(node),
-            residual,
         }
     }
 
@@ -199,7 +187,6 @@ where
             di,
             ..
         } = self.meta;
-        let residual = if self.residual { 1. } else { 0. };
 
         let workspace_size = self.workspace_size(nt, max_seq_len, max_att_len);
         let mut workspace = Workspace::new(queue_alloc, workspace, workspace_size);
@@ -289,6 +276,7 @@ where
 
                 let o = q.merge(1..3).unwrap();
                 let w = self.weights.attn_o(iblk, queue);
+                let residual = if self.id == 0 { 1. } else { 0. };
                 self.mat_mul(&mut x, residual, &o, &w, 1., workspace, queue_alloc)?
             }
             self.all_reduce(&mut x, workspace, queue_alloc)?;
@@ -310,6 +298,7 @@ where
                 self.swiglu(&mut gate, &up, workspace, queue_alloc)?;
 
                 let w = self.weights.ffn_down(iblk, 0, queue);
+                let residual = if self.id == 0 { 1. } else { 0. };
                 self.mat_mul(&mut x, residual, &gate, &w, 1., workspace, queue_alloc)?
             } else {
                 let mut routes_host = routes.clone().map(Blob::new).take();
@@ -336,6 +325,7 @@ where
                 for (mut x, x1) in izip!(x, x1) {
                     let (line, tail) = routes.split_at(nexp);
                     routes = tail;
+                    let mut first = true;
                     for (iexp, kexp) in self.topk_with_index(line) {
                         let w = self.weights.ffn_gate_up(iblk, iexp, queue);
                         self.mat_mul(&mut gate_up, 0., &x1, &w, 1., workspace, queue_alloc)?;
@@ -346,7 +336,9 @@ where
                         self.swiglu(&mut gate, &up, workspace, queue_alloc)?;
 
                         let w = self.weights.ffn_down(iblk, iexp, queue);
-                        self.mat_mul(&mut x, residual, &gate, &w, kexp, workspace, queue_alloc)?
+                        let residual = if self.id == 0 || !first { 1. } else { 0. };
+                        self.mat_mul(&mut x, residual, &gate, &w, kexp, workspace, queue_alloc)?;
+                        first = false
                     }
                 }
             }

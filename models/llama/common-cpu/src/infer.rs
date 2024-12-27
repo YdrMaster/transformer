@@ -69,7 +69,7 @@ fn test_infer() {
                 Some(s.spawn(move || {
                     let WorkerSeed { node, tasks } = seed;
                     let weights = Weights::new(model, range, count);
-                    let mut worker = Worker::new(id, &node, meta.clone(), weights, id == 0);
+                    let mut worker = Worker::new(id, &node, meta.clone(), weights);
                     let mut cache = meta.kv_cache(meta.nctx).map(Blob::new);
                     let sin_cos = <Operators as llama::Operators>::build_sin_cos(
                         meta.dt_embd,

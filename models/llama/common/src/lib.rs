@@ -109,12 +109,12 @@ impl LlamaMeta {
 
     pub fn ffn_gate_up(&self, usage: TensorUsage) -> Tensor<usize> {
         let &Self { d, di, .. } = self;
-        self.mat(di + di, d, usage)
+        self.mat_ffn(di + di, d, usage)
     }
 
     pub fn ffn_down(&self, usage: TensorUsage) -> Tensor<usize> {
         let &Self { d, di, .. } = self;
-        self.mat(d, di, usage)
+        self.mat_ffn(d, di, usage)
     }
 
     pub fn output(&self) -> Tensor<usize> {
@@ -122,14 +122,35 @@ impl LlamaMeta {
     }
 
     fn mat(&self, row: usize, col: usize, usage: TensorUsage) -> Tensor<usize> {
+        let &Self {
+            dt_embd, dt_mat, ..
+        } = self;
+        // NOTICE: 权重矩阵以 mat 类型存储但以 embd 类型参与计算
+        match usage {
+            TensorUsage::Storage => Tensor::new(dt_mat, &[row, col / dt_mat.group_size()]),
+            TensorUsage::Computation => {
+                assert_eq!(dt_embd.group_size(), 1);
+                Tensor::new(dt_embd, &[row, col]).transpose(&[1, 0])
+            }
+        }
+    }
+
+    fn mat_ffn(&self, row: usize, col: usize, usage: TensorUsage) -> Tensor<usize> {
+        let &Self {
+            nexp,
+            dt_embd,
+            dt_mat,
+            ..
+        } = self;
         // NOTICE: 权重矩阵以 mat 类型存储但以 embd 类型参与计算
         match usage {
             TensorUsage::Storage => {
-                Tensor::new(self.dt_mat, &[row, col / self.dt_mat.group_size()])
+                let nexp = if nexp == 0 { 1 } else { nexp };
+                Tensor::new(dt_mat, &[nexp, row, col / dt_mat.group_size()])
             }
             TensorUsage::Computation => {
-                assert_eq!(self.dt_embd.group_size(), 1);
-                Tensor::new(self.dt_embd, &[row, col]).transpose(&[1, 0])
+                assert_eq!(dt_embd.group_size(), 1);
+                Tensor::new(dt_embd, &[row, col]).transpose(&[1, 0])
             }
         }
     }

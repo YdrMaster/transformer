@@ -19,7 +19,7 @@ pub struct BlkStorage<T> {
     pub attn_qkv: T,
     pub attn_o: T,
     pub ffn_norm: T,
-    pub ffn_gate_inp: Option<T>,
+    pub ffn_gate_inp: T,
     pub ffn_gate_up: T,
     pub ffn_down: T,
 }
@@ -58,12 +58,12 @@ impl<'a> Storage<&'a [u8]> {
                 attn_qkv:  tensor![gguf => format!("blk.{i}.attn_qkv.weight"   )].data,
                 attn_o:    tensor![gguf => format!("blk.{i}.attn_output.weight")].data,
                 ffn_norm:  tensor![gguf => format!("blk.{i}.ffn_norm.weight"   )].data,
-                ffn_gate_inp: if !meta.is_moe() { None }
-                              else              { Some(tensor![gguf => format!("blk.{i}.ffn_gate_inp.weight"    )].data) },
-                ffn_gate_up : if !meta.is_moe() {      tensor![gguf => format!("blk.{i}.ffn_gate_up.weight"     )].data  }
-                              else              {      tensor![gguf => format!("blk.{i}.ffn_gate_up_exps.weight")].data  },
-                ffn_down    : if !meta.is_moe() {      tensor![gguf => format!("blk.{i}.ffn_down.weight"        )].data  }
-                              else              {      tensor![gguf => format!("blk.{i}.ffn_down_exps.weight"   )].data  },
+                ffn_gate_inp: if !meta.is_moe() { &[] }
+                              else              { tensor![gguf => format!("blk.{i}.ffn_gate_inp.weight"    )].data },
+                ffn_gate_up : if !meta.is_moe() { tensor![gguf => format!("blk.{i}.ffn_gate_up.weight"     )].data }
+                              else              { tensor![gguf => format!("blk.{i}.ffn_gate_up_exps.weight")].data },
+                ffn_down    : if !meta.is_moe() { tensor![gguf => format!("blk.{i}.ffn_down.weight"        )].data }
+                              else              { tensor![gguf => format!("blk.{i}.ffn_down_exps.weight"   )].data },
             })
             .collect();
 
@@ -84,7 +84,7 @@ impl<T> BlkStorage<T> {
             attn_qkv: f(self.attn_qkv),
             attn_o: f(self.attn_o),
             ffn_norm: f(self.ffn_norm),
-            ffn_gate_inp: self.ffn_gate_inp.map(&mut f),
+            ffn_gate_inp: f(self.ffn_gate_inp),
             ffn_gate_up: f(self.ffn_gate_up),
             ffn_down: f(self.ffn_down),
         }
@@ -96,7 +96,7 @@ impl<T> BlkStorage<T> {
             attn_qkv: &self.attn_qkv,
             attn_o: &self.attn_o,
             ffn_norm: &self.ffn_norm,
-            ffn_gate_inp: self.ffn_gate_inp.as_ref(),
+            ffn_gate_inp: &self.ffn_gate_inp,
             ffn_gate_up: &self.ffn_gate_up,
             ffn_down: &self.ffn_down,
         }
@@ -174,27 +174,22 @@ impl<'w> BlkStorage<&'w [u8]> {
                 own(o_.take())
             },
             ffn_norm: borrow(self.ffn_norm),
-            ffn_gate_inp: if len == count {
-                self.ffn_gate_inp.map(borrow)
-            } else {
-                todo!()
-            },
+            ffn_gate_inp: borrow(self.ffn_gate_inp),
             ffn_gate_up: if len == count {
                 borrow(self.ffn_gate_up)
             } else {
                 let gu = meta.ffn_gate_up(TensorMem).map(|_| self.ffn_gate_up);
-                split!(gu => g, u; [di, di] @ 0);
+                split!(gu => g, u; [di, di] @ 1);
 
                 let di = di / count;
 
-                let g = g.slice(0, di * start, 1, di * len);
-                let u = u.slice(0, di * start, 1, di * len);
-                debug_assert!(g.is_contiguous() && u.is_contiguous());
+                let g = g.slice(1, di * start, 1, di * len);
+                let u = u.slice(1, di * start, 1, di * len);
 
                 let mut ans = dis.ffn_gate_up(TensorMem).map(&mut f);
                 {
                     let ans = ans.map_slice_mut();
-                    split!(ans => g_, u_; [di * len , di * len] @ 0);
+                    split!(ans => g_, u_; [di * len , di * len] @ 1);
                     let mut g_ = g_;
                     let mut u_ = u_;
                     rearrange(&mut g_, &g);
@@ -207,8 +202,8 @@ impl<'w> BlkStorage<&'w [u8]> {
             } else {
                 let down = meta.ffn_down(TensorMem).map(|_| self.ffn_down);
 
-                let d = down.shape()[1] / count;
-                let down = down.slice(1, d * start, 1, d * len);
+                let d = down.shape()[2] / count;
+                let down = down.slice(2, d * start, 1, d * len);
 
                 let mut down_ = Tensor::new(down.dt(), down.shape()).map(&mut f);
                 rearrange(&mut down_, &down);
