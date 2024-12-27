@@ -81,12 +81,13 @@ impl LlamaMeta {
         Tensor::new(dt_embd, &[nt, nvoc])
     }
 
-    pub fn token_embd(&self) -> Tensor<usize> {
-        self.embd(self.nvoc)
+    pub fn norm(&self) -> Tensor<usize> {
+        let &Self { dt_norm, d, .. } = self;
+        Tensor::new(dt_norm, &[d])
     }
 
-    pub fn attn_norm(&self) -> Tensor<usize> {
-        self.norm()
+    pub fn token_embd(&self) -> Tensor<usize> {
+        self.embd(self.nvoc)
     }
 
     pub fn attn_qkv(&self, usage: TensorUsage) -> Tensor<usize> {
@@ -101,8 +102,9 @@ impl LlamaMeta {
         self.mat(d, nh * dh, usage)
     }
 
-    pub fn ffn_norm(&self) -> Tensor<usize> {
-        self.norm()
+    pub fn ffn_gate_inp(&self, usage: TensorUsage) -> Tensor<usize> {
+        let &Self { nexp, d, .. } = self;
+        self.mat(nexp, d, usage)
     }
 
     pub fn ffn_gate_up(&self, usage: TensorUsage) -> Tensor<usize> {
@@ -115,17 +117,8 @@ impl LlamaMeta {
         self.mat(d, di, usage)
     }
 
-    pub fn output_norm(&self) -> Tensor<usize> {
-        self.norm()
-    }
-
     pub fn output(&self) -> Tensor<usize> {
         self.token_embd().transpose(&[1, 0])
-    }
-
-    fn norm(&self) -> Tensor<usize> {
-        let &Self { dt_norm, d, .. } = self;
-        Tensor::new(dt_norm, &[d])
     }
 
     fn mat(&self, row: usize, col: usize, usage: TensorUsage) -> Tensor<usize> {

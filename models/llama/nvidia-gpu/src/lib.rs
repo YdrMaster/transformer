@@ -310,6 +310,7 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
             BlkWeight::AttnQKV => &self.blks.attn_qkv,
             BlkWeight::AttnO => &self.blks.attn_o,
             BlkWeight::FfnNorm => &self.blks.ffn_norm,
+            BlkWeight::FfnGateInp => self.blks.ffn_gate_inp.as_ref().unwrap(),
             BlkWeight::FfnGateUp => &self.blks.ffn_gate_up,
             BlkWeight::FfnDown => &self.blks.ffn_down,
         };

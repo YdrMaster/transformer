@@ -116,6 +116,7 @@ impl WeightLoader for Weights {
             BlkWeight::AttnQKV => &blk.attn_qkv,
             BlkWeight::AttnO => &blk.attn_o,
             BlkWeight::FfnNorm => &blk.ffn_norm,
+            BlkWeight::FfnGateInp => blk.ffn_gate_inp.as_ref().unwrap(),
             BlkWeight::FfnGateUp => &blk.ffn_gate_up,
             BlkWeight::FfnDown => &blk.ffn_down,
         }

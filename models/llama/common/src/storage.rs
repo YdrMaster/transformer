@@ -191,7 +191,11 @@ impl<'w> BlkStorage<&'w [u8]> {
                 own(o_.take())
             },
             ffn_norm: borrow(self.ffn_norm),
-            ffn_gate_inp: None, // TODO
+            ffn_gate_inp: if len == count {
+                self.ffn_gate_inp.map(borrow)
+            } else {
+                todo!()
+            },
             ffn_gate_up: if len == count {
                 borrow(self.ffn_gate_up)
             } else {

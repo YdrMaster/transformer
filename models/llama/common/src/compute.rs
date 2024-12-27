@@ -50,6 +50,7 @@ pub enum BlkWeight {
     AttnQKV,
     AttnO,
     FfnNorm,
+    FfnGateInp,
     FfnGateUp,
     FfnDown,
 }
@@ -165,6 +166,7 @@ where
             nblk,
             nh,
             nkvh,
+            nexp,
             dh,
             di,
             ..
@@ -180,6 +182,8 @@ where
         let mut x1 = x1.map(|_| buf);
 
         let qkv = Tensor::new(x.dt(), &[nt, (nh + nkvh + nkvh) * dh]);
+        let gate_up = Tensor::new(x.dt(), &[nt, di * 2]);
+        let routes = Tensor::new(x.dt(), &[nt, nexp]);
 
         let sin = sin_cos.clone().index(0, 0);
         let cos = sin_cos.index(0, 1);
@@ -265,9 +269,8 @@ where
                 self.rms_norm(&mut x1, &x, &w, workspace, queue_alloc)?;
                 drop(w);
 
-                let gate_up = Tensor::new(x.dt(), &[nt, di * 2]);
                 let (buf, workspace) = workspace.split_at_mut(*gate_up.get());
-                let mut gate_up = gate_up.map(|_| buf);
+                let mut gate_up = gate_up.clone().map(|_| buf);
 
                 let w = self.weights.ffn_gate_up(iblk, queue);
                 self.mat_mul(&mut gate_up, 0., &x1, &w, 1., workspace, queue_alloc)?;
@@ -280,7 +283,17 @@ where
                 let w = self.weights.ffn_down(iblk, queue);
                 self.mat_mul(&mut x, residual, &gate, &w, 1., workspace, queue_alloc)?
             } else {
-                todo!()
+                {
+                    let (buf, workspace) = workspace.split_at_mut(*routes.get());
+                    let mut routes = routes.clone().map(|_| buf);
+
+                    let w = self.weights.ffn_gate_inp(iblk, queue);
+                    self.mat_mul(&mut routes, 0., &x, &w, 1., workspace, queue_alloc)?;
+                    drop(w);
+
+                    todo!()
+                }
+                // TODO MLP
             }
             self.all_reduce(&mut x, workspace, queue_alloc)?
         }
@@ -533,13 +546,12 @@ where
 }
 
 struct WeightDecorator<W> {
-    attn_norm: Tensor<usize>,
+    norm: Tensor<usize>,
     attn_qkv: Tensor<usize>,
     attn_o: Tensor<usize>,
-    ffn_norm: Tensor<usize>,
+    ffn_gate_inp: Tensor<usize>,
     ffn_gate_up: Tensor<usize>,
     ffn_down: Tensor<usize>,
-    output_norm: Tensor<usize>,
     output: Tensor<usize>,
     weights: W,
 }
@@ -548,13 +560,12 @@ impl LlamaMeta {
     fn decorator<W>(&self, weights: W) -> WeightDecorator<W> {
         use crate::TensorUsage::Computation;
         WeightDecorator {
-            attn_norm: self.attn_norm(),
+            norm: self.norm(),
             attn_qkv: self.attn_qkv(Computation),
             attn_o: self.attn_o(Computation),
-            ffn_norm: self.ffn_norm(),
+            ffn_gate_inp: self.ffn_gate_inp(Computation),
             ffn_gate_up: self.ffn_gate_up(Computation),
             ffn_down: self.ffn_down(Computation),
-            output_norm: self.output_norm(),
             output: self.output(),
             weights,
         }
@@ -568,9 +579,8 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        self.attn_norm
-            .clone()
-            .map(|_| self.weights.load_blk(BlkWeight::AttnNorm, iblk, queue))
+        let w = self.weights.load_blk(BlkWeight::AttnNorm, iblk, queue);
+        self.norm.clone().map(|_| w)
     }
 
     #[inline]
@@ -579,9 +589,8 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        self.attn_qkv
-            .clone()
-            .map(|_| self.weights.load_blk(BlkWeight::AttnQKV, iblk, queue))
+        let w = self.weights.load_blk(BlkWeight::AttnQKV, iblk, queue);
+        self.attn_qkv.clone().map(|_| w)
     }
 
     #[inline]
@@ -590,9 +599,8 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        self.attn_o
-            .clone()
-            .map(|_| self.weights.load_blk(BlkWeight::AttnO, iblk, queue))
+        let w = self.weights.load_blk(BlkWeight::AttnO, iblk, queue);
+        self.attn_o.clone().map(|_| w)
     }
 
     #[inline]
@@ -601,9 +609,18 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        self.ffn_norm
-            .clone()
-            .map(|_| self.weights.load_blk(BlkWeight::FfnNorm, iblk, queue))
+        let w = self.weights.load_blk(BlkWeight::FfnNorm, iblk, queue);
+        self.norm.clone().map(|_| w)
+    }
+
+    #[inline]
+    pub fn ffn_gate_inp<'a>(
+        &'a self,
+        iblk: usize,
+        queue: &'a QueueOf<W::Hardware>,
+    ) -> Tensor<W::Weight<'a>> {
+        let w = self.weights.load_blk(BlkWeight::FfnGateInp, iblk, queue);
+        self.ffn_gate_inp.clone().map(|_| w)
     }
 
     #[inline]
@@ -612,9 +629,8 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        self.ffn_gate_up
-            .clone()
-            .map(|_| self.weights.load_blk(BlkWeight::FfnGateUp, iblk, queue))
+        let w = self.weights.load_blk(BlkWeight::FfnGateUp, iblk, queue);
+        self.ffn_gate_up.clone().map(|_| w)
     }
 
     #[inline]
@@ -623,16 +639,13 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        self.ffn_down
-            .clone()
-            .map(|_| self.weights.load_blk(BlkWeight::FfnDown, iblk, queue))
+        let w = self.weights.load_blk(BlkWeight::FfnDown, iblk, queue);
+        self.ffn_down.clone().map(|_| w)
     }
 
     #[inline]
     pub fn output_norm<'a>(&'a self, queue: &'a QueueOf<W::Hardware>) -> Tensor<W::Weight<'a>> {
-        self.output_norm
-            .clone()
-            .map(|_| self.weights.output_norm(queue))
+        self.norm.clone().map(|_| self.weights.output_norm(queue))
     }
 
     #[inline]

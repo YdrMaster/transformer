@@ -214,22 +214,23 @@ impl WeightLoader for Weights<'_> {
             attn_qkv,
             attn_o,
             ffn_norm,
-            ffn_gate_inp: _,
+            ffn_gate_inp,
             ffn_gate_up,
             ffn_down,
         } = &blks[iblk];
 
-        use BlkWeight::{AttnNorm, AttnO, AttnQKV, FfnDown, FfnGateUp, FfnNorm};
+        use BlkWeight::{AttnNorm, AttnO, AttnQKV, FfnDown, FfnGateInp, FfnGateUp, FfnNorm};
         use Dequant::{Borrowed, Cached};
 
         #[rustfmt::skip]
         match which {
-            AttnNorm                       => return Borrowed(attn_norm  ),
-            AttnQKV   if dt_mat == dt_embd => return Borrowed(attn_qkv   ),
-            AttnO     if dt_mat == dt_embd => return Borrowed(attn_o     ),
-            FfnNorm                        => return Borrowed(ffn_norm   ),
-            FfnGateUp if dt_mat == dt_embd => return Borrowed(ffn_gate_up),
-            FfnDown   if dt_mat == dt_embd => return Borrowed(ffn_down   ),
+            AttnNorm                        => return Borrowed(attn_norm  ),
+            AttnQKV    if dt_mat == dt_embd => return Borrowed(attn_qkv   ),
+            AttnO      if dt_mat == dt_embd => return Borrowed(attn_o     ),
+            FfnNorm                         => return Borrowed(ffn_norm   ),
+            FfnGateInp if dt_mat == dt_embd => return Borrowed(ffn_gate_inp.as_ref().unwrap()),
+            FfnGateUp  if dt_mat == dt_embd => return Borrowed(ffn_gate_up),
+            FfnDown    if dt_mat == dt_embd => return Borrowed(ffn_down   ),
             _ => {}
         };
 
@@ -249,13 +250,18 @@ impl WeightLoader for Weights<'_> {
             } = &mut *weight_cache;
             *cached_weight = which;
             *cached_weight_iblk = iblk;
-            #[rustfmt::skip]
             match which {
-                AttnQKV => dequant(dt_mat, dt_embd, attn_qkv   , &mut cache[..size_qkv]),
-                AttnO   => dequant(dt_mat, dt_embd, attn_o     , &mut cache[..size_o  ]),
+                AttnQKV => dequant(dt_mat, dt_embd, attn_qkv, &mut cache[..size_qkv]),
+                AttnO => dequant(dt_mat, dt_embd, attn_o, &mut cache[..size_o]),
+                FfnGateInp => todo!(),
                 FfnGateUp | FfnDown => {
-                           dequant(dt_mat, dt_embd, ffn_gate_up, &mut cache[..size_gate_up]);
-                           dequant(dt_mat, dt_embd, ffn_down   , &mut cache[size_gate_up..][..size_down]);
+                    dequant(dt_mat, dt_embd, ffn_gate_up, &mut cache[..size_gate_up]);
+                    dequant(
+                        dt_mat,
+                        dt_embd,
+                        ffn_down,
+                        &mut cache[size_gate_up..][..size_down],
+                    );
                 }
                 AttnNorm | FfnNorm => unreachable!(),
             };
@@ -266,6 +272,7 @@ impl WeightLoader for Weights<'_> {
             match which {
                 AttnQKV => 0..size_qkv,
                 AttnO => 0..size_o,
+                FfnGateInp => todo!(),
                 FfnGateUp => 0..size_gate_up,
                 FfnDown => size_gate_up..size_gate_up + size_down,
                 AttnNorm | FfnNorm => unreachable!(),
