@@ -60,7 +60,7 @@ where
     type MatMul = op!(mat_mul);
     type Rope = op!(rope);
     type AttnKVCached = op!(attention_kv_cached);
-    type Mlp = op!(mlp);
+    type Swiglu = op!(swiglu);
     type Rearrange = op!(rearrange);
     type AllReduce = R;
 

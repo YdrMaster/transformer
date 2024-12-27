@@ -34,8 +34,8 @@ itertools = "0.13"
 env_logger = "0.11"
 build-script-cfg = "0.0"
 
-operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "7821269", default-features = false }
+operators = { git = "https://github.com/YdrMaster/operators-rs", rev = "91be1cc", default-features = false }
 
 search-cl-tools = { git = "https://github.com/InfiniTensor/clrt", rev = "9b6289d" }
 search-infini-tools = { git = "https://github.com/InfiniTensor/infini-rt", rev = "f40bcb5" }
-search-cuda-tools = { git = "https://github.com/YdrMaster/cuda-driver", rev = "041badf" }
+search-cuda-tools = { git = "https://github.com/YdrMaster/cuda-driver", rev = "5aec761" }
