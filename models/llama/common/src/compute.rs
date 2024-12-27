@@ -342,7 +342,7 @@ where
                     }
                 }
             }
-            self.all_reduce(&mut x, workspace, queue_alloc)?
+            self.all_reduce(&mut x, workspace, queue_alloc)?;
         }
         if logits.shape()[0] == 0 {
             return Ok(());

@@ -25,6 +25,7 @@ pub struct Operators<N = Gpu, R = NonAllReduce<Gpu, Rearrange>>(PhantomData<(N, 
 pub type RandomSample = llama::RandomSample<Gpu, RandomSampleGpu>;
 
 pub struct Weights<'ctx> {
+    nexp: usize,
     blks: LlamaBlkStorage<Cache<'ctx>>,
     output_norm: DevMem<'ctx>,
     output: DevMem<'ctx>,
@@ -256,6 +257,7 @@ impl<'blk> Weights<'blk> {
         };
 
         Self {
+            nexp: model.meta.nexp,
             blks,
             output_norm: stream.from_host(model.output_norm),
             output: stream.from_host(model.output),
@@ -343,13 +345,22 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
     fn load_moe<'a>(
         &'a self,
         which: BlkWeight,
-        _iblk: usize,
-        _iexp: usize,
+        iblk: usize,
+        iexp: usize,
         _queue: &'a QueueOf<Self::Hardware>,
     ) -> Self::Weight<'a> {
-        match which {
-            BlkWeight::FfnGateUp | BlkWeight::FfnDown => todo!(),
+        let cache = match which {
+            BlkWeight::FfnGateUp => &self.blks.ffn_gate_up,
+            BlkWeight::FfnDown => &self.blks.ffn_down,
             _ => unreachable!(),
+        };
+        match cache {
+            Cache::Static(dev) => {
+                let w = &dev[iblk];
+                let one = w.len() / self.nexp;
+                WeightResult::Borrowed(&w[iexp * one..][..one])
+            }
+            Cache::Rolling { .. } => todo!(),
         }
     }
 
