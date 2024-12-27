@@ -214,6 +214,7 @@ impl WeightLoader for Weights<'_> {
             attn_qkv,
             attn_o,
             ffn_norm,
+            ffn_gate_inp: _,
             ffn_gate_up,
             ffn_down,
         } = &blks[iblk];

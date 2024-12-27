@@ -27,6 +27,8 @@ pub struct LlamaMeta {
     pub nvoc: usize,
     pub nh: usize,
     pub nkvh: usize,
+    pub nexp: usize,
+    pub nexp_use: usize,
     pub d: usize,
     pub dh: usize,
     pub di: usize,
@@ -51,6 +53,11 @@ impl LlamaMeta {
         self.nh = self.nh / count * len;
         self.nkvh = self.nkvh / count * len;
         self.di = self.di / count * len;
+    }
+
+    #[inline]
+    pub const fn is_moe(&self) -> bool {
+        self.nexp > 0
     }
 
     pub fn kv_cache(&self, buf: usize) -> Tensor<usize> {

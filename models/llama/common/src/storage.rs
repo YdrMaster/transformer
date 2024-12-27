@@ -19,54 +19,68 @@ pub struct BlkStorage<T> {
     pub attn_qkv: T,
     pub attn_o: T,
     pub ffn_norm: T,
+    pub ffn_gate_inp: Option<T>,
     pub ffn_gate_up: T,
     pub ffn_down: T,
 }
 
 impl<'a> Storage<&'a [u8]> {
     pub fn from_gguf(gguf: &GGufModel<'a>) -> Self {
-        use gguf::GGufMetaError::NotExist;
+        macro_rules! meta {
+            ($key:ident) => {
+                gguf.$key().unwrap()
+            };
+            ($key:ident; $default:expr) => {
+                match gguf.$key() {
+                    Ok(val) => val,
+                    Err(gguf::GGufMetaError::NotExist) => $default,
+                    Err(e) => panic!("failed to read meta: {e:?}"),
+                }
+            };
+        }
+        macro_rules! tensor {
+            ($name:expr) => {
+                &gguf.tensors[&*$name]
+            };
+        }
 
-        let token_embd = &gguf.tensors["token_embd.weight"];
-        let output_norm = &gguf.tensors["output_norm.weight"];
-        let output = gguf.tensors.get("output.weight");
-        let qkv0 = &gguf.tensors["blk.0.attn_qkv.weight"];
+        let token_embd = tensor!["token_embd.weight"];
+        let output_norm = tensor!["output_norm.weight"];
+        let qkv0 = tensor!["blk.0.attn_qkv.weight"];
         #[rustfmt::skip]
         let meta = LlamaMeta {
-            dt_embd:  token_embd.ty,
-            dt_norm: output_norm.ty,
-            dt_mat :        qkv0.ty,
+            dt_embd :  token_embd.ty,
+            dt_norm : output_norm.ty,
+            dt_mat  :        qkv0.ty,
 
-            nblk: gguf.llm_block_count            ().unwrap(),
-            nctx: gguf.llm_context_length         ().unwrap(),
-            nvoc: gguf.tokenizer_ggml_tokens      ().unwrap().len(),
-            nh  : gguf.llm_attention_head_count   ().unwrap(),
-            nkvh: gguf.llm_attention_head_count_kv().unwrap(),
-            d   : gguf.llm_embedding_length       ().unwrap(),
-            dh  : gguf.llm_rope_dimension_count   ().unwrap(),
-            di  : gguf.llm_feed_forward_length    ().unwrap(),
+            nblk    : meta!(llm_block_count            ),
+            nctx    : meta!(llm_context_length         ),
+            nvoc    : meta!(tokenizer_ggml_tokens).len(),
+            nh      : meta!(llm_attention_head_count   ),
+            nkvh    : meta!(llm_attention_head_count_kv),
+            nexp    : meta!(llm_expert_count        ; 0),
+            nexp_use: meta!(llm_expert_used_count   ; 0),
+            d       : meta!(llm_embedding_length       ),
+            dh      : meta!(llm_rope_dimension_count   ),
+            di      : meta!(llm_feed_forward_length    ),
 
-            epsilon: match gguf.llm_attention_layer_norm_rms_epsilon() {
-                Ok(val) => val,
-                Err(NotExist) => 1e-5,
-                Err(e) => panic!("failed to read meta: {e:?}"),
-            },
-            theta  : match gguf.llm_rope_freq_base() {
-                Ok(val) => val,
-                Err(NotExist) => 1e4,
-                Err(e) => panic!("failed to read meta: {e:?}"),
-            },
+            epsilon : meta!(llm_attention_layer_norm_rms_epsilon; 1e-5),
+            theta   : meta!(llm_rope_freq_base                  ; 1e4 ),
         };
 
         #[rustfmt::skip]
         let blocks = (0..meta.nblk)
             .map(|i| BlkStorage {
-                attn_norm:   gguf.tensors[&*format!("blk.{i}.attn_norm.weight"  )].data,
-                attn_qkv:    gguf.tensors[&*format!("blk.{i}.attn_qkv.weight"   )].data,
-                attn_o:      gguf.tensors[&*format!("blk.{i}.attn_output.weight")].data,
-                ffn_norm:    gguf.tensors[&*format!("blk.{i}.ffn_norm.weight"   )].data,
-                ffn_gate_up: gguf.tensors[&*format!("blk.{i}.ffn_gate_up.weight")].data,
-                ffn_down:    gguf.tensors[&*format!("blk.{i}.ffn_down.weight"   )].data,
+                attn_norm:   tensor![format!("blk.{i}.attn_norm.weight"  )].data,
+                attn_qkv:    tensor![format!("blk.{i}.attn_qkv.weight"   )].data,
+                attn_o:      tensor![format!("blk.{i}.attn_output.weight")].data,
+                ffn_norm:    tensor![format!("blk.{i}.ffn_norm.weight"   )].data,
+                ffn_gate_inp: if !meta.is_moe() { None }
+                              else              { Some(tensor![format!("blk.{i}.ffn_gate_inp.weight"    )].data) },
+                ffn_gate_up : if !meta.is_moe() {      tensor![format!("blk.{i}.ffn_gate_up.weight"     )].data  }
+                              else              {      tensor![format!("blk.{i}.ffn_gate_up_exps.weight")].data  },
+                ffn_down    : if !meta.is_moe() {      tensor![format!("blk.{i}.ffn_down.weight"        )].data  }
+                              else              {      tensor![format!("blk.{i}.ffn_down_exps.weight"   )].data  },
             })
             .collect();
 
@@ -74,7 +88,7 @@ impl<'a> Storage<&'a [u8]> {
             meta,
             token_embd: token_embd.data,
             output_norm: output_norm.data,
-            output: output.unwrap_or(token_embd).data,
+            output: gguf.tensors.get("output.weight").unwrap_or(token_embd).data,
             blocks,
         }
     }
@@ -87,6 +101,7 @@ impl<T> BlkStorage<T> {
             attn_qkv: f(self.attn_qkv),
             attn_o: f(self.attn_o),
             ffn_norm: f(self.ffn_norm),
+            ffn_gate_inp: self.ffn_gate_inp.map(&mut f),
             ffn_gate_up: f(self.ffn_gate_up),
             ffn_down: f(self.ffn_down),
         }
@@ -98,6 +113,7 @@ impl<T> BlkStorage<T> {
             attn_qkv: &self.attn_qkv,
             attn_o: &self.attn_o,
             ffn_norm: &self.ffn_norm,
+            ffn_gate_inp: self.ffn_gate_inp.as_ref(),
             ffn_gate_up: &self.ffn_gate_up,
             ffn_down: &self.ffn_down,
         }
@@ -175,6 +191,7 @@ impl<'w> BlkStorage<&'w [u8]> {
                 own(o_.take())
             },
             ffn_norm: borrow(self.ffn_norm),
+            ffn_gate_inp: None, // TODO
             ffn_gate_up: if len == count {
                 borrow(self.ffn_gate_up)
             } else {
