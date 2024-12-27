@@ -1,5 +1,8 @@
 use super::{args::Args, LlamaMeta};
-use gguf::ggml_quants::digit_layout::{types as ty, DigitLayout};
+use gguf::ggml_quants::{
+    digit_layout::{types as ty, DigitLayout},
+    f16,
+};
 use itertools::izip;
 use operators::{
     all_reduce::{self, AllReduce, ReduceOp},
@@ -12,7 +15,7 @@ use operators::{
     ByteOf, Hardware, LaunchError, Operator, QueueAlloc, QueueOf, TopoNode, Workspace,
 };
 use std::ops::{Deref, DerefMut};
-use tensor::{split, Tensor};
+use tensor::{split, Blob, Tensor};
 
 pub trait Operators {
     type Hardware: Hardware;
@@ -28,6 +31,14 @@ pub trait Operators {
     fn debug<T>(tensor: &Tensor<T>, queue: &QueueOf<Self::Hardware>)
     where
         T: Deref<Target = [ByteOf<Self::Hardware>]>;
+
+    fn memcpy_d2h<T: Copy>(
+        _dst: &mut [T],
+        _src: &[ByteOf<Self::Hardware>],
+        _queue: &QueueOf<Self::Hardware>,
+    ) {
+        todo!()
+    }
 
     fn build_sin_cos<QA>(
         dt: DigitLayout,
@@ -67,6 +78,16 @@ pub trait WeightLoader {
         iblk: usize,
         queue: &'a QueueOf<Self::Hardware>,
     ) -> Self::Weight<'a>;
+
+    fn load_moe<'a>(
+        &'a self,
+        _which: BlkWeight,
+        _iblk: usize,
+        _iexp: usize,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> Self::Weight<'a> {
+        todo!()
+    }
 
     fn output_norm<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Weight<'a>;
     fn output<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Weight<'a>;
@@ -118,23 +139,30 @@ impl<Ops: Operators, W> LlamaWorker<Ops, W> {
 
     pub fn workspace_size(&self, nt: usize, max_seq_len: usize, max_att_len: usize) -> usize {
         let LlamaMeta {
-            dt_mat,
             nh,
             nkvh,
-            d,
+            nexp,
             dh,
             di,
             ..
         } = self.meta;
 
-        let ele = dt_mat.nbytes();
-        let embd = nt * d * ele;
-        let qkv = nt * (nh + nkvh + nkvh) * dh * ele;
-        let gate_up = nt * di * 2 * ele;
-        let q = max_seq_len * nh * dh * ele;
-        let att = nkvh * max_seq_len * max_att_len * ele;
+        let embd = self.meta.embd(nt);
+        let dt = embd.dt();
+        let embd = embd.take();
 
-        embd + qkv.max(gate_up) + q + att
+        let qkv = Tensor::new(dt, &[nt * (nh + nkvh + nkvh), dh]).take();
+        let q = Tensor::new(dt, &[max_seq_len, nh, dh]).take();
+        let att = Tensor::new(dt, &[nkvh, max_seq_len, max_att_len]).take();
+
+        if self.meta.is_moe() {
+            let routes = Tensor::new(dt, &[nt, nexp]).take();
+            let gate_up = Tensor::new(dt, &[1, di * 2]).take();
+            embd + (qkv + q + att).max(routes).max(gate_up)
+        } else {
+            let gate_up = Tensor::new(dt, &[nt, di * 2]).take();
+            embd + (qkv + q + att).max(gate_up)
+        }
     }
 }
 
@@ -167,6 +195,7 @@ where
             nh,
             nkvh,
             nexp,
+            nexp_use,
             dh,
             di,
             ..
@@ -182,7 +211,7 @@ where
         let mut x1 = x1.map(|_| buf);
 
         let qkv = Tensor::new(x.dt(), &[nt, (nh + nkvh + nkvh) * dh]);
-        let gate_up = Tensor::new(x.dt(), &[nt, di * 2]);
+        let gate_up = Tensor::new(x.dt(), &[if self.meta.is_moe() { 1 } else { nt }, di * 2]);
         let routes = Tensor::new(x.dt(), &[nt, nexp]);
 
         let sin = sin_cos.clone().index(0, 0);
@@ -264,15 +293,15 @@ where
             }
             self.all_reduce(&mut x, workspace, queue_alloc)?;
 
-            if !self.meta.is_moe() {
-                let w = self.weights.ffn_norm(iblk, queue);
-                self.rms_norm(&mut x1, &x, &w, workspace, queue_alloc)?;
-                drop(w);
+            let w = self.weights.ffn_norm(iblk, queue);
+            self.rms_norm(&mut x1, &x, &w, workspace, queue_alloc)?;
+            drop(w);
 
+            if !self.meta.is_moe() {
                 let (buf, workspace) = workspace.split_at_mut(*gate_up.get());
                 let mut gate_up = gate_up.clone().map(|_| buf);
 
-                let w = self.weights.ffn_gate_up(iblk, queue);
+                let w = self.weights.ffn_gate_up(iblk, 0, queue);
                 self.mat_mul(&mut gate_up, 0., &x1, &w, 1., workspace, queue_alloc)?;
                 drop(w);
 
@@ -280,20 +309,65 @@ where
                 let mut gate = gate;
                 self.swiglu(&mut gate, &up, workspace, queue_alloc)?;
 
-                let w = self.weights.ffn_down(iblk, queue);
+                let w = self.weights.ffn_down(iblk, 0, queue);
                 self.mat_mul(&mut x, residual, &gate, &w, 1., workspace, queue_alloc)?
             } else {
+                let mut routes_host = routes.clone().map(Blob::new).take();
+                // gate_inp
                 {
                     let (buf, workspace) = workspace.split_at_mut(*routes.get());
-                    let mut routes = routes.clone().map(|_| buf);
+                    let mut routes_dev = routes.clone().map(|_| buf);
 
                     let w = self.weights.ffn_gate_inp(iblk, queue);
-                    self.mat_mul(&mut routes, 0., &x, &w, 1., workspace, queue_alloc)?;
+                    self.mat_mul(&mut routes_dev, 0., &x1, &w, 1., workspace, queue_alloc)?;
                     drop(w);
 
-                    todo!()
+                    Ops::memcpy_d2h(&mut routes_host, routes_dev.get(), queue)
                 }
-                // TODO MLP
+                let ([], routes, []) = (unsafe { routes_host.align_to_mut::<f16>() }) else {
+                    unreachable!()
+                };
+
+                for itok in (0..nt).rev() {
+                    // fused topk
+                    let mut routes = routes[itok * nexp..][..nexp]
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .collect::<Vec<_>>();
+
+                    routes.sort_unstable_by(|&(_, a), &(_, b)| b.total_cmp(&a));
+                    let max = routes[0].1.to_f32();
+                    let mut sum = 0.;
+                    let mut moe_gate = vec![(0, 0.0f32); nexp_use];
+                    for ((i, x), gate) in std::iter::zip(routes, &mut moe_gate) {
+                        let softmax = (x.to_f32() - max).exp();
+                        *gate = (i, softmax);
+                        sum += softmax
+                    }
+                    for (_, x) in &mut moe_gate {
+                        *x /= sum
+                    }
+                    // mlp
+                    let (buf, workspace) = workspace.split_at_mut(*gate_up.get());
+                    let mut gate_up = gate_up.clone().map(|_| buf);
+
+                    let mut x = x.map_slice_mut().slice(0, itok, 0, 1);
+                    let x1 = x1.map_slice_mut().slice(0, itok, 0, 1);
+
+                    for (iexp, kexp) in moe_gate {
+                        let w = self.weights.ffn_gate_up(iblk, iexp, queue);
+                        self.mat_mul(&mut gate_up, 0., &x1, &w, 1., workspace, queue_alloc)?;
+                        drop(w);
+
+                        split!(gate_up => gate, up; [di, di] @ 1);
+                        let mut gate = gate;
+                        self.swiglu(&mut gate, &up, workspace, queue_alloc)?;
+
+                        let w = self.weights.ffn_down(iblk, iexp, queue);
+                        self.mat_mul(&mut x, residual, &gate, &w, kexp, workspace, queue_alloc)?
+                    }
+                }
             }
             self.all_reduce(&mut x, workspace, queue_alloc)?
         }
@@ -553,6 +627,7 @@ struct WeightDecorator<W> {
     ffn_gate_up: Tensor<usize>,
     ffn_down: Tensor<usize>,
     output: Tensor<usize>,
+    is_moe: bool,
     weights: W,
 }
 
@@ -567,6 +642,7 @@ impl LlamaMeta {
             ffn_gate_up: self.ffn_gate_up(Computation),
             ffn_down: self.ffn_down(Computation),
             output: self.output(),
+            is_moe: self.is_moe(),
             weights,
         }
     }
@@ -627,9 +703,15 @@ impl<W: WeightLoader> WeightDecorator<W> {
     pub fn ffn_gate_up<'a>(
         &'a self,
         iblk: usize,
+        iexp: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        let w = self.weights.load_blk(BlkWeight::FfnGateUp, iblk, queue);
+        const WHICH: BlkWeight = BlkWeight::FfnGateUp;
+        let w = if self.is_moe {
+            self.weights.load_moe(WHICH, iblk, iexp, queue)
+        } else {
+            self.weights.load_blk(WHICH, iblk, queue)
+        };
         self.ffn_gate_up.clone().map(|_| w)
     }
 
@@ -637,9 +719,15 @@ impl<W: WeightLoader> WeightDecorator<W> {
     pub fn ffn_down<'a>(
         &'a self,
         iblk: usize,
+        iexp: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        let w = self.weights.load_blk(BlkWeight::FfnDown, iblk, queue);
+        const WHICH: BlkWeight = BlkWeight::FfnDown;
+        let w = if self.is_moe {
+            self.weights.load_moe(WHICH, iblk, iexp, queue)
+        } else {
+            self.weights.load_blk(WHICH, iblk, queue)
+        };
         self.ffn_down.clone().map(|_| w)
     }
 

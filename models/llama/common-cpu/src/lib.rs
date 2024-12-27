@@ -31,6 +31,7 @@ pub struct Weights<'w> {
     weight_cache: RefCell<WeightCache>,
     dt_embd: DigitLayout,
     dt_mat: DigitLayout,
+    nexp: usize,
     size_qkv: usize,
     size_o: usize,
     size_gate_up: usize,
@@ -69,6 +70,16 @@ where
         T: Deref<Target = [ByteOf<Self::Hardware>]>,
     {
         println!("{tensor}");
+    }
+
+    fn memcpy_d2h<T: Copy>(
+        dst: &mut [T],
+        src: &[ByteOf<Self::Hardware>],
+        _queue: &QueueOf<Self::Hardware>,
+    ) {
+        let count = size_of_val(dst);
+        assert_eq!(size_of_val(src), count);
+        unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr().cast::<u8>(), count) }
     }
 }
 
@@ -130,6 +141,7 @@ impl<'w> Weights<'w> {
             weight_cache,
             dt_embd: meta.dt_embd,
             dt_mat: meta.dt_mat,
+            nexp: meta.nexp,
             size_qkv,
             size_o,
             size_gate_up,
@@ -278,6 +290,30 @@ impl WeightLoader for Weights<'_> {
                 AttnNorm | FfnNorm => unreachable!(),
             },
         )
+    }
+
+    fn load_moe<'a>(
+        &'a self,
+        which: BlkWeight,
+        iblk: usize,
+        iexp: usize,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> Self::Weight<'a> {
+        let &Self {
+            ref blks,
+            dt_embd,
+            dt_mat,
+            nexp,
+            ..
+        } = self;
+        assert_eq!(dt_embd, dt_mat);
+        let w = match which {
+            BlkWeight::FfnGateUp => &*blks[iblk].ffn_gate_up,
+            BlkWeight::FfnDown => &*blks[iblk].ffn_down,
+            _ => unreachable!(),
+        };
+        let one = w.len() / nexp;
+        Dequant::Borrowed(&w[iexp * one..][..one])
     }
 
     #[inline]
