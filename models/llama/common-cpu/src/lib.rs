@@ -85,9 +85,12 @@ impl ComputeStream for Transformer {
 
 struct LlamaLayer<'a>(&'a LayerStorage<Weight>);
 
-impl<'a> llama::LLamaLayer for LlamaLayer<'a> {
+impl llama::LLamaLayer for LlamaLayer<'_> {
     type Byte = u8;
-    type Storage<'m> = Weight where Self: 'm;
+    type Storage<'m>
+        = Weight
+    where
+        Self: 'm;
 
     #[inline]
     fn att_layernorm(&self) -> Tensor<Self::Storage<'_>> {

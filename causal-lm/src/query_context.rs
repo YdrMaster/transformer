@@ -10,7 +10,7 @@ pub struct QueryContext<'a, Storage> {
     pub range: Range<upos>,
 }
 
-impl<'a, Storage> QueryContext<'a, Storage> {
+impl<Storage> QueryContext<'_, Storage> {
     /// 查询的位置。
     #[inline]
     pub const fn pos(&self) -> upos {
@@ -33,7 +33,7 @@ type KVCache<'a, T> = (
     Tensor<LocalSplitable<&'a mut [T]>>,
 );
 
-impl<'a, Storage, T> QueryContext<'a, Storage>
+impl<Storage, T> QueryContext<'_, Storage>
 where
     Storage: DerefMut<Target = [T]>,
 {

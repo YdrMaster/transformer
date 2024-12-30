@@ -74,7 +74,7 @@ impl SliceDim {
                         step: self.step,
                         len: {
                             let step = self.step as udim;
-                            ((len - self.start + step - 1) / step).min(self.len)
+                            (len - self.start).div_ceil(step).min(self.len)
                         },
                     }
                 }
@@ -93,7 +93,7 @@ impl SliceDim {
                         step: self.step,
                         len: {
                             let step = self.step.unsigned_abs();
-                            ((start + 1 + step - 1) / step).min(self.len)
+                            (start + 1).div_ceil(step).min(self.len)
                         },
                     }
                 }

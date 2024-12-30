@@ -515,9 +515,12 @@ macro_rules! access {
             .map_physical(|u| &**u.sprout_ref($self.transfer.ctx()))
     };
 }
-impl<'a> llama::LLamaLayer for LayerLoader<'a> {
+impl llama::LLamaLayer for LayerLoader<'_> {
     type Byte = DevByte;
-    type Storage<'m> = &'m[DevByte] where Self: 'm;
+    type Storage<'m>
+        = &'m [DevByte]
+    where
+        Self: 'm;
 
     fn att_layernorm(&self) -> Tensor<Self::Storage<'_>> {
         access!(self, att_layernorm)
