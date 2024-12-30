@@ -34,9 +34,6 @@ jobs:
       - name: Check format
         run: cargo fmt --check
 
-      - name: Update to latest deps
-        run: cargo update
-
       - name: Run test
         run: cargo test
 
