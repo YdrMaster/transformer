@@ -4,7 +4,7 @@ use operators::{
     add_rows::{self, AddRows},
     all_reduce::{self, AllReduce, ReduceOp},
     attention_kv_cached::{self, AttnKVCached},
-    gpt2_mlp::{self, Gpt2Mlp},
+    gelu::{self, Gelu},
     layer_norm::{self, LayerNorm},
     mat_mul::{self, MatMul},
     rearrange::{self, Rearrange},
@@ -16,13 +16,13 @@ use tensor::{split, Tensor};
 pub trait Operators {
     type Hardware: Hardware;
     type TopoNode: TopoNode<Self::Hardware>;
+    type AddRows: AddRows<Self::Hardware>;
     type LayerNorm: LayerNorm<Self::Hardware>;
     type MatMul: MatMul<Self::Hardware>;
     type AttnKVCached: AttnKVCached<Self::Hardware>;
+    type Gelu: Gelu<Self::Hardware>;
     type Rearrange: Rearrange<Self::Hardware>;
     type AllReduce: AllReduce<Self::Hardware, Self::TopoNode>;
-    type AddRows: AddRows<Self::Hardware>;
-    type Mlp: Gpt2Mlp<Self::Hardware>;
 
     fn debug<T>(tensor: &Tensor<T>)
     where
@@ -60,13 +60,13 @@ pub trait WeightLoader {
 pub struct Gpt2Worker<Ops: Operators, W> {
     meta: Gpt2Meta,
     weights: WeightDecorator<W>,
+    add_rows: Ops::AddRows,
     layer_norm: Ops::LayerNorm,
     mat_mul: Ops::MatMul,
     attn_kv_cached: Ops::AttnKVCached,
+    gelu: Ops::Gelu,
     rearrange: Ops::Rearrange,
     all_reduce: Ops::AllReduce,
-    add_rows: Ops::AddRows,
-    mlp: Ops::Mlp,
     pub debug: bool,
 }
 
@@ -76,13 +76,13 @@ impl<Ops: Operators, W> Gpt2Worker<Ops, W> {
         Self {
             weights: meta.decorator(weights), // meta.decorator
             meta,
+            add_rows: Ops::AddRows::new(processor),
             layer_norm: Ops::LayerNorm::new(processor),
             mat_mul: Ops::MatMul::new(processor),
             attn_kv_cached: Ops::AttnKVCached::new(processor),
+            gelu: Ops::Gelu::new(processor),
             rearrange: Ops::Rearrange::new(processor),
             all_reduce: Ops::AllReduce::new(node),
-            add_rows: Ops::AddRows::new(processor),
-            mlp: Ops::Mlp::new(processor),
             debug: true,
         }
     }
@@ -94,23 +94,19 @@ impl<Ops: Operators, W> Gpt2Worker<Ops, W> {
 
     pub fn workspace_size(&self, nt: usize, max_seq_len: usize, max_att_len: usize) -> usize {
         let Gpt2Meta {
-            dt_mat,
-            nh,
-            nkvh,
-            d,
-            // dh,
-            di,
-            ..
+            nh, nkvh, dh, di, ..
         } = self.meta;
 
-        let ele = dt_mat.nbytes();
-        let embd = nt * d * ele;
-        let qkv = nt * (nh + nkvh + nkvh) * ele;
-        let gate_up = nt * di * 2 * ele;
-        let q = max_seq_len * nh * ele;
-        let att = nkvh * max_seq_len * max_att_len * ele;
+        let embd = self.meta.embd(nt);
+        let dt = embd.dt();
+        let embd = embd.take();
 
-        embd + qkv.max(gate_up) + q + att
+        let qkv = Tensor::new(dt, &[nt * (nh + nkvh + nkvh), dh]).take();
+        let q = Tensor::new(dt, &[max_seq_len, nh, dh]).take();
+        let att = Tensor::new(dt, &[nkvh, max_seq_len, max_att_len]).take();
+
+        let up = Tensor::new(dt, &[nt, di]).take();
+        embd + (qkv + q + att).max(up)
     }
 }
 
@@ -130,126 +126,112 @@ where
         QA: QueueAlloc<Hardware = Ops::Hardware>,
     {
         let Args {
-            mut token_embd,
+            mut embd,
             mut logits,
             mut requests,
-            num_tokens: nt,
             max_seq_len,
             max_att_len,
             idx,
             idx_add,
         } = args;
         let Gpt2Meta {
-            dt_embd,
             nblk,
             nh,
             nkvh,
             dh,
+            di,
             ..
         } = self.meta;
 
+        let queue = queue_alloc.queue();
+        {
+            let pos_embd = self.weights.pos_embd(queue);
+            self.add_rows(&mut embd, &pos_embd, &idx, workspace, queue_alloc)?
+        }
+
+        let nt = embd.shape()[0];
+        let mut x = embd;
+        let x1 = Tensor::new(x.dt(), x.shape());
+        let qkv = Tensor::new(x.dt(), &[nt, (nh + nkvh + nkvh) * dh]);
+        let up = Tensor::new(x.dt(), &[nt, di]);
+
         let workspace_size = self.workspace_size(nt, max_seq_len, max_att_len);
         let mut workspace = Workspace::new(queue_alloc, workspace, workspace_size);
-        let queue = queue_alloc.queue();
-        let old_token_embd_l = token_embd.layout();
-        // wpe+wte
-        {
-            self.add_rows(
-                &mut token_embd,
-                &self.weights.pos_embd(queue),
-                &idx,
-                &mut workspace,
-                queue_alloc,
-            )?;
-            token_embd = token_embd.merge(0..2).unwrap();
-        }
-        let mut x = token_embd;
-        let x1 = Tensor::new(x.dt(), x.shape());
         let (buf, workspace) = workspace.split_at_mut(*x1.get());
         let mut x1 = x1.map(|_| buf);
-        let qkv = Tensor::new(dt_embd, &[nt, (nh + nkvh + nkvh) * dh]);
 
         let req_split = requests.iter().map(|req| req.seq_len).collect::<Vec<_>>();
 
         for iblk in 0..nblk {
             {
-                let [scale, bias] = self.weights.attn_norm(iblk, queue);
-                self.layer_norm(&mut x1, &x, &scale, &bias, workspace, queue_alloc)?
-            }
-            let (buf, workspace) = workspace.split_at_mut(*qkv.get());
-            let mut qkv = qkv.clone().map(|_| buf);
-            {
-                let [scale, bias] = self.weights.attn_qkv(iblk, queue);
-                let bias = bias.broadcast(0, nt);
-                self.rearrange(&mut qkv, &bias, workspace, queue_alloc)?;
-                self.mat_mul(&mut qkv, 1., &x1, &scale, 1., workspace, queue_alloc)?
-            }
-            let qkv = qkv.tile(1, &[nh + nkvh + nkvh, dh]);
-            split!(qkv => q, k, v; [nh, nkvh, nkvh] @ 1);
-            let mut q = q;
-            let k = k;
-            let v = v;
-            {
-                let q = q.map_slice_mut().transpose(&[1, 0]);
-                let k = k.map_slice().transpose(&[1, 0]);
-                let v = v.map_slice().transpose(&[1, 0]);
-                let q = q.split(1, &req_split);
-                let k = k.split(1, &req_split);
-                let v = v.split(1, &req_split);
+                let wb = self.weights.attn_norm(iblk, queue);
+                self.layer_norm(&mut x1, &x, wb, workspace, queue_alloc)?;
 
-                for (mut q, k, v, req) in izip!(q, k, v, &mut requests) {
-                    let cache = req
-                        .cache
-                        .as_mut() // [buf, nblk, 2, nkvh, dh]
-                        .index(1, iblk) // [buf, 2, nkvh, dh]
-                        .transpose(&[2, 0]) // [nkvh, 2, buf, dh]
-                        .map(|t| &mut t[..]);
+                let (buf, workspace) = workspace.split_at_mut(*qkv.get());
+                let mut qkv = qkv.clone().map(|_| buf);
 
-                    split!(cache => kc, vc; [1, 1] @ 1);
-                    let mut o = unsafe { q.map_slice_static_mut() };
-                    self.attn_kv_cached(
-                        &mut q,
-                        &k,
-                        &v,
-                        &mut o,
-                        &mut kc.index(1, 0),
-                        &mut vc.index(1, 0),
-                        req.pos,
-                        workspace,
-                        queue_alloc,
-                    )?
+                let [w, b] = self.weights.attn_qkv(iblk, queue);
+                self.mat_mul(&mut qkv, &x1, (w, Some(b)), workspace, queue_alloc)?;
+
+                let qkv = qkv.tile(1, &[nh + nkvh + nkvh, dh]);
+                split!(qkv => q, k, v; [nh, nkvh, nkvh] @ 1);
+                let mut q = q;
+                let k = k;
+                let v = v;
+                {
+                    let q = q.map_slice_mut().transpose(&[1, 0]);
+                    let k = k.map_slice().transpose(&[1, 0]);
+                    let v = v.map_slice().transpose(&[1, 0]);
+                    let q = q.split(1, &req_split);
+                    let k = k.split(1, &req_split);
+                    let v = v.split(1, &req_split);
+
+                    for (mut q, k, v, req) in izip!(q, k, v, &mut requests) {
+                        let cache = req
+                            .cache
+                            .as_mut() // [buf, nblk, 2, nkvh, dh]
+                            .index(1, iblk) // [buf, 2, nkvh, dh]
+                            .transpose(&[2, 0]) // [nkvh, 2, buf, dh]
+                            .map(|t| &mut t[..]);
+
+                        split!(cache => kc, vc; [1, 1] @ 1);
+                        let mut o = unsafe { q.map_slice_static_mut() };
+                        self.attn_kv_cached(
+                            &mut q,
+                            &k,
+                            &v,
+                            &mut o,
+                            &mut kc.index(1, 0),
+                            &mut vc.index(1, 0),
+                            req.pos,
+                            workspace,
+                            queue_alloc,
+                        )?
+                    }
                 }
-            }
-            {
                 let o = q.map_slice().merge(1..3).unwrap();
-                let [scale, bias] = self.weights.attn_o(iblk, queue);
-                let bias = bias.broadcast(0, nt);
-                self.rearrange(&mut x1, &bias, workspace, queue_alloc)?;
-                self.mat_mul(&mut x1, 1., &o, &scale, 1., workspace, queue_alloc)?;
+                let [w, b] = self.weights.attn_o(iblk, queue);
+                self.mat_mul(&mut x1, &o, (w, Some(b)), workspace, queue_alloc)?
             }
+            self.add_rows(&mut x1, &x, &idx_add, workspace, queue_alloc)?;
             self.all_reduce(&mut x1, workspace, queue_alloc)?;
 
-            // 残差连接 wte+wpe 的数据
-            self.add_rows.launch(
-                &add_rows::Args {
-                    dst_layout: old_token_embd_l.clone(),
-                    dst_base: x1.base_mut(),
-                    src_layout: x.layout(),
-                    src_base: x.base(),
-                    idx_layout: idx_add.layout(),
-                    idx_base: idx_add.map_slice().base(),
-                },
-                workspace,
-                queue_alloc,
-            )?;
+            let wb = self.weights.ffn_norm(iblk, queue);
+            self.layer_norm(&mut x, &x1, wb, workspace, queue_alloc)?;
             {
-                let [scale, bias] = self.weights.ffn_norm(iblk, queue);
-                self.layer_norm(&mut x, &x1, &scale, &bias, workspace, queue_alloc)?
+                let (buf, workspace) = workspace.split_at_mut(*up.get());
+                let mut up = up.clone().map(|_| buf);
+
+                let [w, b] = self.weights.ffn_up(iblk, queue);
+                self.mat_mul(&mut up, &x, (w, Some(b)), workspace, queue_alloc)?;
+
+                self.gelu(&mut up, workspace, queue_alloc)?;
+
+                let [w, b] = self.weights.ffn_down(iblk, queue);
+                self.mat_mul(&mut x, &up, (w, Some(b)), workspace, queue_alloc)?
             }
-            self.mlp(&mut x, iblk, workspace, queue_alloc)?;
-            // 残差连接 att 之后的数据
-            let mut x = x.map_slice_mut().tile(0, &[1, nt]);
-            self.add_rows(&mut x, &x1, &idx_add, workspace, queue_alloc)?
+            self.add_rows(&mut x, &x1, &idx_add, workspace, queue_alloc)?;
+            self.all_reduce(&mut x1, workspace, queue_alloc)?
         }
         if logits.shape()[0] == 0 {
             return Ok(());
@@ -273,13 +255,13 @@ where
         assert_eq!(dst, logits.shape()[0]);
 
         let mut x = x.map_slice_mut().slice(0, 0, 1, dst);
-        {
-            let inplace = unsafe { x.map_slice_static() };
-            let [scale, bias] = self.weights.output_norm(queue);
-            self.layer_norm(&mut x, &inplace, &scale, &bias, workspace, queue_alloc)?
-        }
-        let output = self.weights.output_weight(queue).transpose(&[1, 0]);
-        self.mat_mul(&mut logits, 0., &x, &output, 1., workspace, queue_alloc)
+
+        let inplace = unsafe { x.map_slice_static() };
+        let wb = self.weights.output_norm(queue);
+        self.layer_norm(&mut x, &inplace, wb, workspace, queue_alloc)?;
+
+        let w = self.weights.output_weight(queue).transpose(&[1, 0]);
+        self.mat_mul(&mut logits, &x, (w, None), workspace, queue_alloc)
     }
 }
 
@@ -289,20 +271,18 @@ where
     Ops: Operators,
     W: WeightLoader<Hardware = Ops::Hardware>,
 {
-    fn layer_norm<Y, X, W_, B, QA>(
+    fn layer_norm<Y, X, WB, QA>(
         &self,
         y: &mut Tensor<Y>,
         x: &Tensor<X>,
-        s: &Tensor<W_>,
-        b: &Tensor<B>,
+        [w, b]: [Tensor<WB>; 2],
         workspace: &mut [ByteOf<Ops::Hardware>],
         queue_alloc: &QA,
     ) -> Result<(), LaunchError>
     where
         Y: DerefMut<Target = [ByteOf<Ops::Hardware>]>,
         X: Deref<Target = [ByteOf<Ops::Hardware>]>,
-        W_: Deref<Target = [ByteOf<Ops::Hardware>]>,
-        B: Deref<Target = [ByteOf<Ops::Hardware>]>,
+        WB: Deref<Target = [ByteOf<Ops::Hardware>]>,
         QA: QueueAlloc<Hardware = Ops::Hardware>,
     {
         self.layer_norm.launch(
@@ -311,8 +291,8 @@ where
                 y_base: y.base_mut(),
                 x_layout: x.layout(),
                 x_base: x.base(),
-                scale_layout: s.layout(),
-                scale_base: s.base(),
+                scale_layout: w.layout(),
+                scale_base: w.base(),
                 bias_layout: b.layout(),
                 bias_base: b.base(),
                 epsilon: self.meta.epsilon,
@@ -322,22 +302,28 @@ where
         )
     }
 
-    fn mat_mul<C, A, B, QA>(
+    fn mat_mul<C, A, WB, QA>(
         &self,
         c: &mut Tensor<C>,
-        beta: f32,
         a: &Tensor<A>,
-        b: &Tensor<B>,
-        alpha: f32,
+        (w, b): (Tensor<WB>, Option<Tensor<WB>>),
         workspace: &mut [ByteOf<Ops::Hardware>],
         queue_alloc: &QA,
     ) -> Result<(), LaunchError>
     where
         C: DerefMut<Target = [ByteOf<Ops::Hardware>]>,
         A: Deref<Target = [ByteOf<Ops::Hardware>]>,
-        B: Deref<Target = [ByteOf<Ops::Hardware>]>,
+        WB: Deref<Target = [ByteOf<Ops::Hardware>]>,
         QA: QueueAlloc<Hardware = Ops::Hardware>,
     {
+        let beta = if let Some(b) = b {
+            let n = c.shape()[0];
+            let b = b.broadcast(0, n);
+            self.rearrange(c, &b, workspace, queue_alloc)?;
+            1.
+        } else {
+            0.
+        };
         self.mat_mul.launch(
             &mat_mul::Args {
                 c_layout: c.layout(),
@@ -345,9 +331,9 @@ where
                 beta,
                 a_layout: a.layout(),
                 a_base: a.base(),
-                b_layout: b.layout(),
-                b_base: b.base(),
-                alpha,
+                b_layout: w.layout(),
+                b_base: w.base(),
+                alpha: 1.,
             },
             workspace,
             queue_alloc,
@@ -390,6 +376,26 @@ where
                 v_cache_layout: vc.layout(),
                 v_cache_base: vc.base_mut(),
                 pos: pos.into(),
+            },
+            workspace,
+            queue_alloc,
+        )
+    }
+
+    fn gelu<X, QA>(
+        &self,
+        x: &mut Tensor<X>,
+        workspace: &mut [ByteOf<Ops::Hardware>],
+        queue_alloc: &QA,
+    ) -> Result<(), LaunchError>
+    where
+        X: DerefMut<Target = [ByteOf<Ops::Hardware>]>,
+        QA: QueueAlloc<Hardware = Ops::Hardware>,
+    {
+        self.gelu.launch(
+            &gelu::Args {
+                layout: x.layout(),
+                base: x.base_mut(),
             },
             workspace,
             queue_alloc,
@@ -459,6 +465,8 @@ where
         Idx: Deref<Target = [ByteOf<Ops::Hardware>]>,
         QA: QueueAlloc<Hardware = Ops::Hardware>,
     {
+        let n = dst.shape()[0];
+        let mut dst = dst.map_slice_mut().tile(0, &[1, n]);
         self.add_rows.launch(
             &add_rows::Args {
                 dst_layout: dst.layout(),
@@ -467,38 +475,6 @@ where
                 src_base: src.base(),
                 idx_layout: idx.layout(),
                 idx_base: idx.base(),
-            },
-            workspace,
-            queue_alloc,
-        )
-    }
-
-    fn mlp<Y, QA>(
-        &self,
-        y: &mut Tensor<Y>,
-        iblk: usize,
-        workspace: &mut [ByteOf<Ops::Hardware>],
-        queue_alloc: &QA,
-    ) -> Result<(), LaunchError>
-    where
-        Y: DerefMut<Target = [ByteOf<Ops::Hardware>]>,
-        QA: QueueAlloc<Hardware = Ops::Hardware>,
-    {
-        let queue = queue_alloc.queue();
-        let [up_weight, up_bias] = self.weights.ffn_up(iblk, queue);
-        let [down_weight, down_bias] = self.weights.ffn_down(iblk, queue);
-        self.mlp.launch(
-            &gpt2_mlp::Args {
-                y_layout: y.layout(),
-                y_base: y.base_mut(),
-                up_weight_layout: up_weight.layout(),
-                up_weight_base: up_weight.base(),
-                up_bias_layout: up_bias.layout(),
-                up_bias_base: up_bias.base(),
-                down_weight_layout: down_weight.layout(),
-                down_weight_base: down_weight.base(),
-                down_bias_layout: down_bias.layout(),
-                down_bias_base: down_bias.base(),
             },
             workspace,
             queue_alloc,

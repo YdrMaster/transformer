@@ -25,9 +25,10 @@ pub struct Gpt2Meta {
     pub dt_norm: DigitLayout,
     pub dt_mat: DigitLayout,
 
-    pub nblk: usize,
     pub nctx: usize,
     pub nvoc: usize,
+
+    pub nblk: usize,
     pub nh: usize,
     pub nkvh: usize,
     pub d: usize,
@@ -35,7 +36,6 @@ pub struct Gpt2Meta {
     pub di: usize,
 
     pub epsilon: f32,
-    pub theta: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -76,13 +76,16 @@ impl Gpt2Meta {
         Tensor::new(dt_embd, &[nt, nvoc])
     }
 
-    // wte
-    pub fn token_embd(&self) -> Tensor<usize> {
-        self.embd(self.nvoc)
+    pub fn pos_embd(&self) -> Tensor<usize> {
+        let &Self {
+            dt_embd, nvoc, d, ..
+        } = self;
+        Tensor::new(dt_embd, &[nvoc, d])
     }
-    // wpe
-    pub fn position_embd(&self) -> Tensor<usize> {
-        self.embd(self.nctx)
+
+    pub fn norm(&self) -> Tensor<usize> {
+        let &Self { dt_norm, d, .. } = self;
+        Tensor::new(dt_norm, &[d])
     }
 
     pub fn attn_qkv_w(&self, usage: TensorUsage) -> Tensor<usize> {
@@ -110,8 +113,9 @@ impl Gpt2Meta {
         self.mat(di, d, usage)
     }
 
-    pub fn ffn_up_b(&self, _usage: TensorUsage) -> Tensor<usize> {
-        Tensor::new(self.dt_embd, &[self.di])
+    pub fn ffn_up_b(&self, usage: TensorUsage) -> Tensor<usize> {
+        let &Self { di, .. } = self;
+        self.mat(di, 1, usage)
     }
 
     pub fn ffn_down_w(&self, usage: TensorUsage) -> Tensor<usize> {
@@ -119,22 +123,13 @@ impl Gpt2Meta {
         self.mat(d, di, usage)
     }
 
-    pub fn ffn_down_b(&self, _usage: TensorUsage) -> Tensor<usize> {
-        Tensor::new(self.dt_embd, &[self.d])
+    pub fn ffn_down_b(&self, usage: TensorUsage) -> Tensor<usize> {
+        let &Self { d, .. } = self;
+        self.mat(d, 1, usage)
     }
 
     pub fn output_weight(&self) -> Tensor<usize> {
         Tensor::new(self.dt_embd, &[self.nvoc, self.d])
-    }
-
-    pub fn norm(&self) -> Tensor<usize> {
-        let &Self { dt_norm, d, .. } = self;
-        Tensor::new(dt_norm, &[d])
-    }
-
-    pub fn pos_embd(&self) -> Tensor<usize> {
-        let &Self { nvoc, d, .. } = self;
-        Tensor::new(self.dt_embd, &[nvoc, d])
     }
 
     fn mat(&self, row: usize, col: usize, usage: TensorUsage) -> Tensor<usize> {

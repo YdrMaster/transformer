@@ -37,13 +37,14 @@ where
 {
     type Hardware = Cpu;
     type TopoNode = N;
+    type AddRows = op!(add_rows);
     type LayerNorm = op!(layer_norm);
     type MatMul = op!(mat_mul);
     type AttnKVCached = op!(attention_kv_cached);
+    type Gelu = op!(gelu);
     type Rearrange = op!(rearrange);
     type AllReduce = R;
-    type AddRows = op!(add_rows);
-    type Mlp = op!(gpt2_mlp);
+
     fn debug<T>(tensor: &Tensor<T>)
     where
         T: Deref<Target = [ByteOf<Self::Hardware>]>,

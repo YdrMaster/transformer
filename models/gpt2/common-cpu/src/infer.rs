@@ -27,13 +27,19 @@ fn test_infer() {
         return;
     };
     let gguf = GGufModel::read(model.iter().map(|s| &**s));
-    let model = Storage::from_gguf(&gguf);
+
     let TokenizerAndPrompt {
         eos,
         tokenizer,
         prompt,
     } = TokenizerAndPrompt::new(&gguf, prompt, as_user);
+
+    let model = Storage::from_gguf(&gguf);
+    println!("{:?}", model.meta);
+
     let sample_args = SampleArgs::new(temperature, top_p, top_k).expect("invalid sample args");
+    println!("{sample_args:?}");
+
     let &Gpt2Meta {
         dt_embd,
         nctx,
@@ -49,7 +55,7 @@ fn test_infer() {
 
     test_utils::test_infer(eos, tokenizer, &prompt, max_steps, |input, pos| {
         // 词汇编码缓存
-        let mut embd = Tensor::new(dt_embd, &[1, input.len(), d]).map(Blob::new);
+        let mut embd = Tensor::new(dt_embd, &[input.len(), d]).map(Blob::new);
         // 词汇位置缓存
         let mut logits = model.meta.logits(1).map(Blob::new);
         let l = embd.get().len() / input.len();
@@ -60,7 +66,7 @@ fn test_infer() {
         worker
             .launch(
                 gpt2::args::Args {
-                    token_embd: embd.map_slice_mut(),
+                    embd: embd.map_slice_mut(),
                     logits: logits.map_slice_mut(),
                     idx: postion(input.len(), pos).map_slice(),
                     idx_add: postion(input.len(), 0).map_slice(),
@@ -70,7 +76,6 @@ fn test_infer() {
                         out_len: 1,
                         pos,
                     }],
-                    num_tokens: input.len(),
                     max_seq_len: input.len(),
                     max_att_len: pos + input.len(),
                 },

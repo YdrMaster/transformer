@@ -1,5 +1,5 @@
 use crate::Gpt2Meta;
-use gguf::{ext::Mmap, map_files, GGufMetaMapExt, GGufModel};
+use gguf::{ext::Mmap, map_files, meta, tensor, GGufMetaMapExt, GGufModel};
 use std::path::Path;
 
 #[derive(Clone)]
@@ -38,6 +38,10 @@ impl<'a> Storage<&'a [u8]> {
         let output_norm_w = &gguf.tensors["output_norm.weight"];
         let output = &gguf.tensors["output.weight"];
         let qkv0 = &gguf.tensors["blk.0.attn_qkv.weight"];
+
+        let d = meta![gguf => llm_embedding_length];
+        let nh = meta![gguf => llm_attention_head_count];
+
         #[rustfmt::skip]
         let meta = Gpt2Meta {
             dt_embd:  token_embd.ty,
@@ -46,33 +50,33 @@ impl<'a> Storage<&'a [u8]> {
             dt_norm: output_norm_w.ty,
             dt_mat :               qkv0.ty,
 
-            nblk: gguf.llm_block_count            ().unwrap(),
-            nctx: gguf.llm_context_length         ().unwrap(),
-            nvoc: gguf.tokenizer_ggml_tokens      ().unwrap().len(),
-            nh  : gguf.llm_attention_head_count   ().unwrap(),
-            nkvh: gguf.llm_attention_head_count_kv().unwrap(),
-            d   : gguf.llm_embedding_length       ().unwrap(),
-            dh  : gguf.llm_embedding_length       ().unwrap()/gguf.llm_attention_head_count   ().unwrap(),
-            di  : gguf.llm_feed_forward_length    ().unwrap(),
-            epsilon: 1e-5,
-            theta: 1e4,
+            nctx: meta![gguf => llm_context_length   ],
+            nvoc: meta![gguf => tokenizer_ggml_tokens].len(),
+
+            d, nh,
+            nblk: meta![gguf => llm_block_count                 ],
+            nkvh: meta![gguf => llm_attention_head_count_kv;  nh],
+            dh  : meta![gguf => llm_rope_dimension_count; d / nh],
+            di  : meta![gguf => llm_feed_forward_length         ],
+
+            epsilon: meta![gguf => llm_attention_layer_norm_rms_epsilon; 1e-5],
         };
         #[rustfmt::skip]
         let blocks = (0..meta.nblk)
             .map(|i| BlkStorage {
-                attn_norm_w: gguf.tensors[&*format!("blk.{i}.attn_norm.weight"  )].data,
-                attn_norm_b: gguf.tensors[&*format!("blk.{i}.attn_norm.bias"    )].data,
-                attn_qkv_w:  gguf.tensors[&*format!("blk.{i}.attn_qkv.weight"   )].data,
-                attn_qkv_b:  gguf.tensors[&*format!("blk.{i}.attn_qkv.bias"     )].data,
-                attn_o_w:    gguf.tensors[&*format!("blk.{i}.attn_output.weight")].data,
-                attn_o_b:    gguf.tensors[&*format!("blk.{i}.attn_output.bias"  )].data,
+                attn_norm_w: tensor![gguf => format!("blk.{i}.attn_norm.weight"  )].data,
+                attn_norm_b: tensor![gguf => format!("blk.{i}.attn_norm.bias"    )].data,
+                attn_qkv_w:  tensor![gguf => format!("blk.{i}.attn_qkv.weight"   )].data,
+                attn_qkv_b:  tensor![gguf => format!("blk.{i}.attn_qkv.bias"     )].data,
+                attn_o_w:    tensor![gguf => format!("blk.{i}.attn_output.weight")].data,
+                attn_o_b:    tensor![gguf => format!("blk.{i}.attn_output.bias"  )].data,
 
-                ffn_norm_w:  gguf.tensors[&*format!("blk.{i}.ffn_norm.weight"   )].data,
-                ffn_norm_b:  gguf.tensors[&*format!("blk.{i}.ffn_norm.bias"     )].data,
-                ffn_up_w:    gguf.tensors[&*format!("blk.{i}.ffn_up.weight"     )].data,
-                ffn_up_b:    gguf.tensors[&*format!("blk.{i}.ffn_up.bias"       )].data,
-                ffn_down_w:  gguf.tensors[&*format!("blk.{i}.ffn_down.weight"   )].data,
-                ffn_down_b:  gguf.tensors[&*format!("blk.{i}.ffn_down.bias"     )].data,
+                ffn_norm_w:  tensor![gguf => format!("blk.{i}.ffn_norm.weight"   )].data,
+                ffn_norm_b:  tensor![gguf => format!("blk.{i}.ffn_norm.bias"     )].data,
+                ffn_up_w:    tensor![gguf => format!("blk.{i}.ffn_up.weight"     )].data,
+                ffn_up_b:    tensor![gguf => format!("blk.{i}.ffn_up.bias"       )].data,
+                ffn_down_w:  tensor![gguf => format!("blk.{i}.ffn_down.weight"   )].data,
+                ffn_down_b:  tensor![gguf => format!("blk.{i}.ffn_down.bias"     )].data,
             })
             .collect();
 
@@ -146,5 +150,5 @@ fn test_load() {
     };
     let gguf = GGufModel::read(shards.iter().map(|s| &**s));
     let gpt2 = Storage::from_gguf(&gguf);
-    println!("{:?}", gpt2.meta);
+    println!("{:?}", gpt2.meta)
 }

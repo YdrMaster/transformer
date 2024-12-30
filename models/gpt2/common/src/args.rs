@@ -3,14 +3,13 @@ use tensor::Tensor;
 
 pub struct Args<'a, H: Hardware> {
     /// shape: [nt, d]
-    pub token_embd: Tensor<&'a mut [H::Byte]>,
+    pub embd: Tensor<&'a mut [H::Byte]>,
     /// shape: [nout, nvoc]
     pub logits: Tensor<&'a mut [H::Byte]>,
     pub idx: Tensor<&'a [H::Byte]>,
     pub idx_add: Tensor<&'a [H::Byte]>,
     pub requests: Vec<Request<'a, H>>,
 
-    pub num_tokens: usize,
     pub max_seq_len: usize,
     pub max_att_len: usize,
 }
