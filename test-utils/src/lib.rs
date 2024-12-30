@@ -68,7 +68,13 @@ impl Inference {
             model: map_files(path),
             devices: var(DEVICES).ok(),
             prompt: var(PROMPT).unwrap_or_else(|_| String::from("Once upon a time,")),
-            as_user: var(AS_USER).ok().is_some_and(|s| !s.is_empty()),
+            as_user: var(AS_USER)
+                .ok()
+                .map_or(false, |s| match s.to_ascii_lowercase().as_str() {
+                    "true" | "t" | "yes" | "y" | "1" => true,
+                    "false" | "f" | "no" | "n" | "0" => false,
+                    _ => panic!("`{AS_USER}` is not a boolean value"),
+                }),
             temperature: parse(TEMPERATURE, 0.),
             top_p: parse(TOP_P, 1.),
             top_k: parse(TOP_K, usize::MAX),
