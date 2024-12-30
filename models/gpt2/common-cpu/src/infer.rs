@@ -69,7 +69,6 @@ fn test_infer() {
                     embd: embd.map_slice_mut(),
                     logits: logits.map_slice_mut(),
                     idx: postion(input.len(), pos).map_slice(),
-                    idx_add: postion(input.len(), 0).map_slice(),
                     requests: vec![gpt2::args::Request {
                         cache: cache.map_slice_mut(),
                         seq_len: input.len(),

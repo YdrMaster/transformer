@@ -7,7 +7,6 @@ pub struct Args<'a, H: Hardware> {
     /// shape: [nout, nvoc]
     pub logits: Tensor<&'a mut [H::Byte]>,
     pub idx: Tensor<&'a [H::Byte]>,
-    pub idx_add: Tensor<&'a [H::Byte]>,
     pub requests: Vec<Request<'a, H>>,
 
     pub max_seq_len: usize,

@@ -42,6 +42,7 @@ where
     type MatMul = op!(mat_mul);
     type AttnKVCached = op!(attention_kv_cached);
     type Gelu = op!(gelu);
+    type Add = op!(add);
     type Rearrange = op!(rearrange);
     type AllReduce = R;
 
