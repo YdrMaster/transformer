@@ -1,5 +1,5 @@
 ﻿use crate::{ClipMeta, ProjectorType};
-use gguf::{GGufMetaMapExt, GGufModel};
+use gguf::{meta, GGufMetaMapExt, GGufModel};
 
 #[derive(Clone)]
 pub struct Storage<T> {
@@ -9,13 +9,29 @@ pub struct Storage<T> {
     pub pos_embd: T,
     pub pre_norm: Option<[T; 2]>,
     pub post_norm: Option<[T; 2]>,
+    pub blocks: Box<[BlkStorage<T>]>,
+}
+
+#[derive(Clone, Copy)]
+pub struct BlkStorage<T> {
+    pub attn_norm_w: T,
+    pub attn_norm_b: T,
+    pub attn_qkv_w: T,
+    pub attn_qkv_b: T,
+    pub attn_o_w: T,
+    pub attn_o_b: T,
+
+    pub ffn_norm_w: T,
+    pub ffn_norm_b: T,
+    pub ffn_up_w: T,
+    pub ffn_up_b: T,
+    pub ffn_down_w: T,
+    pub ffn_down_b: T,
 }
 
 impl<'a> Storage<&'a [u8]> {
     pub fn from_gguf(gguf: &GGufModel<'a>) -> Self {
         let pos_embd = &gguf.tensors["v.position_embd.weight"];
-        let patch_embd_w = &gguf.tensors["v.patch_embd.weight"];
-        let patch_embd_b = &gguf.tensors["v.patch_embd.bias"];
 
         let projector = match gguf.get_str("clip.projector_type").unwrap() {
             "mlp" => ProjectorType::Mlp,
@@ -25,31 +41,51 @@ impl<'a> Storage<&'a [u8]> {
             _ => ProjectorType::Unknown,
         };
 
+        let d = meta![gguf => (usize) "clip.vision.embedding_length"];
+        let nh = meta![gguf => (usize) "clip.vision.attention.head_count"];
+
         #[rustfmt::skip]
         let meta = ClipMeta {
             projector,
-            minicpmv_version: gguf.get_usize("clip.minicpmv_version").unwrap() as _,
+            minicpmv_version: meta![gguf => (usize) "clip.minicpmv_version"] as _,
 
-            dt     : patch_embd_w.ty,
-            dt_embd: pos_embd.ty,
-            dt_norm: gguf.tensors["v.blk.0.ln1.weight"].ty,
+            dt     : pos_embd.ty,
+            d_patch: meta![gguf => (usize) "clip.vision.patch_size"],
+            d_image: meta![gguf => (usize) "clip.vision.image_size"],
 
-            nblk   : gguf.get_usize("clip.vision.block_count"                 ).unwrap(),
-            d_patch: gguf.get_usize("clip.vision.patch_size"                  ).unwrap(),
-            d_image: gguf.get_usize("clip.vision.image_size"                  ).unwrap(),
-            nh     : gguf.get_usize("clip.vision.attention.head_count"        ).unwrap(),
-            d      : gguf.get_usize("clip.vision.embedding_length"            ).unwrap(),
-            di     : gguf.get_usize("clip.vision.feed_forward_length"         ).unwrap(),
+            d, nh,
+            nblk: meta![gguf => (usize) "clip.vision.block_count"                 ],
+            nkvh: meta![gguf => (usize) "clip.vision.attention.head_count_kv";  nh],
+            dh  : meta![gguf => (usize) "clip.vision.rope_dimension_count"; d / nh],
+            di  : meta![gguf => (usize) "clip.vision.feed_forward_length"         ],
 
             image_mean: get_rgb(gguf, "clip.vision.image_mean"),
             image_std : get_rgb(gguf, "clip.vision.image_std" ),
             epsilon   : gguf.get_f32("clip.vision.attention.layer_norm_epsilon").unwrap(),
         };
+        #[rustfmt::skip]
+        let blocks = (0..meta.nblk)
+            .map(|i| BlkStorage {
+                attn_norm_w: gguf.tensors[&*format!("v.blk.{i}.ln1.weight"     )].data,
+                attn_norm_b: gguf.tensors[&*format!("v.blk.{i}.ln1.bias"       )].data,
+                attn_qkv_w:  gguf.tensors[&*format!("v.blk.{i}.attn_qkv.weight")].data,
+                attn_qkv_b:  gguf.tensors[&*format!("v.blk.{i}.attn_qkv.bias"  )].data,
+                attn_o_w:    gguf.tensors[&*format!("v.blk.{i}.attn_out.weight")].data,
+                attn_o_b:    gguf.tensors[&*format!("v.blk.{i}.attn_out.bias"  )].data,
+
+                ffn_norm_w:  gguf.tensors[&*format!("v.blk.{i}.ln2.weight"     )].data,
+                ffn_norm_b:  gguf.tensors[&*format!("v.blk.{i}.ln2.bias"       )].data,
+                ffn_up_w:    gguf.tensors[&*format!("v.blk.{i}.ffn_up.weight"  )].data,
+                ffn_up_b:    gguf.tensors[&*format!("v.blk.{i}.ffn_up.bias"    )].data,
+                ffn_down_w:  gguf.tensors[&*format!("v.blk.{i}.ffn_down.weight")].data,
+                ffn_down_b:  gguf.tensors[&*format!("v.blk.{i}.ffn_down.bias"  )].data,
+            })
+            .collect();
 
         Self {
             meta,
-            patch_embd_w: patch_embd_w.data,
-            patch_embd_b: patch_embd_b.data,
+            patch_embd_w: gguf.tensors["v.patch_embd.weight"].data,
+            patch_embd_b: gguf.tensors["v.patch_embd.bias"].data,
             pos_embd: pos_embd.data,
             pre_norm: gguf
                 .tensors
@@ -59,6 +95,7 @@ impl<'a> Storage<&'a [u8]> {
                 .tensors
                 .get("v.post_ln.weight")
                 .map(|w| [w.data, gguf.tensors["v.post_ln.bias"].data]),
+            blocks,
         }
     }
 }

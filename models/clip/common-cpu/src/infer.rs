@@ -25,7 +25,7 @@ fn test_infer() {
     println!("{meta:#?}");
 
     let &ClipMeta {
-        dt_embd,
+        dt,
 
         d_image,
         d_patch,
@@ -42,7 +42,7 @@ fn test_infer() {
     let time = Instant::now();
     let slices = image
         .slice_uhd(9, d_image, d_patch)
-        .normalize(dt_embd, image_mean, image_std);
+        .normalize(dt, image_mean, image_std);
     println!("slice image {:?}", time.elapsed());
 
     let weights = Weights::new(&storage);

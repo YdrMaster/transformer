@@ -144,6 +144,17 @@ mod macros {
                 Err(e) => panic!("failed to read meta: {e:?}"),
             }
         };
+
+        ($gguf:expr => (usize) $key:expr) => {
+            $gguf.get_usize($key).unwrap()
+        };
+        ($gguf:expr => (usize) $key:expr; $default:expr) => {
+            match $gguf.get_usize($key) {
+                Ok(val) => val,
+                Err(gguf::GGufMetaError::NotExist) => $default,
+                Err(e) => panic!("failed to read meta: {e:?}"),
+            }
+        };
     }
     #[macro_export]
     macro_rules! tensor {
