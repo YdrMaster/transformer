@@ -20,6 +20,7 @@ pub struct Operators<N = InfiniNode, R = InfiniAllReduce>(PhantomData<(N, R)>);
 pub type RandomSample = llama::RandomSample<Device, RandomSampleNpu>;
 
 pub struct Weights {
+    nexp: usize,
     blks: Box<[LlamaBlkStorage<DevBlob>]>,
     output_norm: DevBlob,
     output: DevBlob,
@@ -78,6 +79,7 @@ impl Weights {
         let device = stream.get_device();
         let mut loader = None;
         Self {
+            nexp: model.meta.nexp,
             blks: model
                 .blocks
                 .iter()
@@ -172,14 +174,18 @@ impl WeightLoader for Weights {
     fn load_moe<'a>(
         &'a self,
         which: BlkWeight,
-        _iblk: usize,
-        _iexp: usize,
+        iblk: usize,
+        iexp: usize,
         _queue: &'a QueueOf<Self::Hardware>,
     ) -> Self::Weight<'a> {
-        match which {
-            BlkWeight::FfnGateUp | BlkWeight::FfnDown => todo!(),
+        let blk = &self.blks[iblk];
+        let w = match which {
+            BlkWeight::FfnGateUp => &blk.ffn_gate_up,
+            BlkWeight::FfnDown => &blk.ffn_down,
             _ => unreachable!(),
-        }
+        };
+        let one = w.len() / self.nexp;
+        &w[iexp * one..][..one]
     }
 
     #[inline]
