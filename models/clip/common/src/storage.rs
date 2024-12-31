@@ -1,5 +1,5 @@
 ﻿use crate::{ClipMeta, ProjectorType};
-use gguf::{meta, GGufMetaMapExt, GGufModel};
+use gguf::{meta, tensor, GGufMetaMapExt, GGufModel};
 
 #[derive(Clone)]
 pub struct Storage<T> {
@@ -64,37 +64,37 @@ impl<'a> Storage<&'a [u8]> {
             epsilon   : gguf.get_f32("clip.vision.attention.layer_norm_epsilon").unwrap(),
         };
         #[rustfmt::skip]
-        let blocks = (0..meta.nblk)
+        let blocks = (0..=meta.nblk)
             .map(|i| BlkStorage {
-                attn_norm_w: gguf.tensors[&*format!("v.blk.{i}.ln1.weight"     )].data,
-                attn_norm_b: gguf.tensors[&*format!("v.blk.{i}.ln1.bias"       )].data,
-                attn_qkv_w:  gguf.tensors[&*format!("v.blk.{i}.attn_qkv.weight")].data,
-                attn_qkv_b:  gguf.tensors[&*format!("v.blk.{i}.attn_qkv.bias"  )].data,
-                attn_o_w:    gguf.tensors[&*format!("v.blk.{i}.attn_out.weight")].data,
-                attn_o_b:    gguf.tensors[&*format!("v.blk.{i}.attn_out.bias"  )].data,
+                attn_norm_w: tensor![gguf => format!("v.blk.{i}.ln1.weight"     )].data,
+                attn_norm_b: tensor![gguf => format!("v.blk.{i}.ln1.bias"       )].data,
+                attn_qkv_w:  tensor![gguf => format!("v.blk.{i}.attn_qkv.weight")].data,
+                attn_qkv_b:  tensor![gguf => format!("v.blk.{i}.attn_qkv.bias"  )].data,
+                attn_o_w:    tensor![gguf => format!("v.blk.{i}.attn_out.weight")].data,
+                attn_o_b:    tensor![gguf => format!("v.blk.{i}.attn_out.bias"  )].data,
 
-                ffn_norm_w:  gguf.tensors[&*format!("v.blk.{i}.ln2.weight"     )].data,
-                ffn_norm_b:  gguf.tensors[&*format!("v.blk.{i}.ln2.bias"       )].data,
-                ffn_up_w:    gguf.tensors[&*format!("v.blk.{i}.ffn_up.weight"  )].data,
-                ffn_up_b:    gguf.tensors[&*format!("v.blk.{i}.ffn_up.bias"    )].data,
-                ffn_down_w:  gguf.tensors[&*format!("v.blk.{i}.ffn_down.weight")].data,
-                ffn_down_b:  gguf.tensors[&*format!("v.blk.{i}.ffn_down.bias"  )].data,
+                ffn_norm_w:  tensor![gguf => format!("v.blk.{i}.ln2.weight"     )].data,
+                ffn_norm_b:  tensor![gguf => format!("v.blk.{i}.ln2.bias"       )].data,
+                ffn_up_w:    tensor![gguf => format!("v.blk.{i}.ffn_up.weight"  )].data,
+                ffn_up_b:    tensor![gguf => format!("v.blk.{i}.ffn_up.bias"    )].data,
+                ffn_down_w:  tensor![gguf => format!("v.blk.{i}.ffn_down.weight")].data,
+                ffn_down_b:  tensor![gguf => format!("v.blk.{i}.ffn_down.bias"  )].data,
             })
             .collect();
 
         Self {
             meta,
-            patch_embd_w: gguf.tensors["v.patch_embd.weight"].data,
-            patch_embd_b: gguf.tensors["v.patch_embd.bias"].data,
+            patch_embd_w: tensor![gguf => "v.patch_embd.weight"].data,
+            patch_embd_b: tensor![gguf => "v.patch_embd.bias"  ].data,
             pos_embd: pos_embd.data,
             pre_norm: gguf
                 .tensors
                 .get("v.pre_ln.weight")
-                .map(|w| [w.data, gguf.tensors["v.pre_ln.bias"].data]),
+                .map(|w| [w.data, tensor![gguf => "v.pre_ln.bias" ].data]),
             post_norm: gguf
                 .tensors
                 .get("v.post_ln.weight")
-                .map(|w| [w.data, gguf.tensors["v.post_ln.bias"].data]),
+                .map(|w| [w.data, tensor![gguf => "v.post_ln.bias"].data]),
             blocks,
         }
     }
