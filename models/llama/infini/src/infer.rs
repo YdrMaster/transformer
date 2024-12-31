@@ -72,6 +72,10 @@ fn test_infer() {
             infini_rt::init(infini_rt::DEVICE_NVIDIA);
             WorkerSeed::new(InfiniNode::nv_gpu(&indices))
         }
+        "ascend" => {
+            infini_rt::init(infini_rt::DEVICE_ASCEND);
+            WorkerSeed::new(InfiniNode::ascend_npu(&indices))
+        }
         _ => todo!(),
     };
     thread::scope(|s| {
