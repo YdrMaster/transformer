@@ -1,4 +1,4 @@
-#![cfg(driver_detected)]
+#![cfg(any(use_nvidia, use_iluvatar))]
 
 use common::{Contiguous, Slab};
 use llama::{BlkWeight, LlamaBlkStorage, LlamaStorage, Tensor, WeightLoader};
@@ -208,7 +208,7 @@ impl<'blk> Weights<'blk> {
                 let roll_cache = vec
                     .iter()
                     .take(pool_size)
-                    .map(|host| (stream.from_host(host), stream.record()))
+                    .map(|host| (ctx.from_host(host), stream.record()))
                     .collect::<Box<_>>();
                 Cache::Rolling {
                     stream: stream.clone(),
@@ -258,8 +258,8 @@ impl<'blk> Weights<'blk> {
         Self {
             nexp: model.meta.nexp,
             blks,
-            output_norm: stream.from_host(model.output_norm),
-            output: stream.from_host(model.output),
+            output_norm: ctx.from_host(model.output_norm),
+            output: ctx.from_host(model.output),
         }
     }
 }
@@ -275,7 +275,7 @@ impl<'ctx> H2DLoader<'ctx> {
         Self {
             event: stream.record(),
             host: stream.ctx().malloc_host::<u8>(size),
-            dev: stream.malloc::<u8>(size),
+            dev: stream.ctx().malloc::<u8>(size),
         }
     }
 
@@ -295,7 +295,7 @@ impl<'ctx> H2DLoader<'ctx> {
         stream.memcpy_h2d(&mut self.dev, &self.host);
         self.event = stream.record();
         (
-            replace(&mut self.dev, stream.malloc::<u8>(self.host.len())),
+            replace(&mut self.dev, stream.ctx().malloc::<u8>(self.host.len())),
             cache,
         )
     }
@@ -377,5 +377,5 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
 #[cfg(test)]
 mod infer;
 
-#[cfg(all(test, nccl_detected))]
+#[cfg(all(test, use_nccl))]
 mod nccl_parallel;

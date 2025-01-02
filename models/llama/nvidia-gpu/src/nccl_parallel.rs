@@ -1,4 +1,4 @@
-﻿use crate::{Operators, RandomSample, Weights};
+use crate::{Operators, RandomSample, Weights};
 use gguf::GGufModel;
 use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
 use log::info;
