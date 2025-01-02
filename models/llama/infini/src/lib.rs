@@ -133,13 +133,12 @@ impl H2DLoader {
     }
 
     fn load(&mut self, host: Contiguous<HostBlob>, stream: &Stream) -> DevBlob {
-        let device = stream.get_device();
         self.event.synchronize();
         match host {
             Contiguous::Borrowed(host) => self.host.copy_from_slice(host),
             Contiguous::Owned(host) => self.host = host,
         };
-        device.memcpy_h2d(&mut self.dev, &self.host);
+        stream.memcpy_h2d(&mut self.dev, &self.host);
         stream.record(&mut self.event);
         replace(&mut self.dev, stream.malloc::<u8>(self.host.len()))
     }
