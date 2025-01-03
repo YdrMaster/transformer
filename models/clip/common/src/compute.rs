@@ -112,7 +112,7 @@ impl<Ops: Operators, W> ClipWorker<Ops, W> {
 
         let qkv = Tensor::new(dt, &[np * (nh + nkvh + nkvh), dh]).take();
         let q = Tensor::new(dt, &[np, nh, dh]).take();
-        let att = Tensor::new(dt, &[nkvh, np, np]).take();
+        let att = Tensor::new(dt, &[nh, np, np]).take();
 
         let up = Tensor::new(dt, &[np, di]).take();
         embd + (qkv + q + att).max(up)

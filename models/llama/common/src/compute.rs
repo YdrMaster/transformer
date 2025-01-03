@@ -141,7 +141,7 @@ impl<Ops: Operators, W> LlamaWorker<Ops, W> {
 
         let qkv = Tensor::new(dt, &[nt * (nh + nkvh + nkvh), dh]).take();
         let q = Tensor::new(dt, &[max_seq_len, nh, dh]).take();
-        let att = Tensor::new(dt, &[nkvh, max_seq_len, max_att_len]).take();
+        let att = Tensor::new(dt, &[nh, max_seq_len, max_att_len]).take();
 
         if self.meta.is_moe() {
             let routes = Tensor::new(dt, &[nt, nexp]).take();

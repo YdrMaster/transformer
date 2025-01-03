@@ -107,7 +107,7 @@ impl<Ops: Operators, W> Gpt2Worker<Ops, W> {
 
         let qkv = Tensor::new(dt, &[nt * (nh + nkvh + nkvh), dh]).take();
         let q = Tensor::new(dt, &[max_seq_len, nh, dh]).take();
-        let att = Tensor::new(dt, &[nkvh, max_seq_len, max_att_len]).take();
+        let att = Tensor::new(dt, &[nh, max_seq_len, max_att_len]).take();
 
         let up = Tensor::new(dt, &[nt, di]).take();
         embd + (qkv + q + att).max(up)
