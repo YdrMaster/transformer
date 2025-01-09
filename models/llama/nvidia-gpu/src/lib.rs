@@ -5,10 +5,9 @@ use llama::{BlkWeight, LlamaBlkStorage, LlamaStorage, Tensor, WeightLoader};
 use log::trace;
 use operators::{
     all_reduce::{AllReduce, NonAllReduce},
-    cuda::{memcpy_d2h, AsRaw, CurrentCtx, DevByte, DevMem, Event, HostMem, Stream},
-    nvidia_gpu::Gpu,
-    random_sample::nvidia_gpu::Operator as RandomSampleGpu,
-    rearrange::nvidia_gpu::Operator as Rearrange,
+    cuda::{memcpy_d2h, AsRaw, CurrentCtx, DevByte, DevMem, Event, Gpu, HostMem, Stream},
+    random_sample::cuda::Operator as RandomSampleGpu,
+    rearrange::cuda::Operator as Rearrange,
     ByteOf, QueueOf, TopoNode,
 };
 use std::{
@@ -119,7 +118,7 @@ impl Drop for WeightResult<'_, '_> {
 
 macro_rules! op {
     ($name:ident) => {
-        operators::$name::nvidia_gpu::Operator
+        operators::$name::cuda::Operator
     };
 }
 

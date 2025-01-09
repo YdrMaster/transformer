@@ -4,8 +4,7 @@ use llama::{
     ext::ggml_quants::f16, LlamaArgs, LlamaMeta, LlamaRequest, LlamaStorage, LlamaWorker, Tensor,
 };
 use operators::{
-    cuda::{self, memcpy_d2h, Device, NoDevice},
-    nvidia_gpu::{Config, Gpu},
+    cuda::{self, memcpy_d2h, Config, Device, Gpu, NoDevice},
     random_sample::{KVPair, SampleArgs},
 };
 use std::{slice::from_raw_parts_mut, time::Instant, usize};
