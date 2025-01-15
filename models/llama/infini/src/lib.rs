@@ -100,6 +100,7 @@ impl Weights {
                     load! {
                         attn_norm
                         attn_qkv
+                        attn_qkv_bias
                         attn_o
                         ffn_norm
                         ffn_gate_inp
@@ -162,6 +163,7 @@ impl WeightLoader for Weights {
         match which {
             BlkWeight::AttnNorm => &blk.attn_norm,
             BlkWeight::AttnQKV => &blk.attn_qkv,
+            BlkWeight::AttnQKVBias => &blk.attn_qkv_bias,
             BlkWeight::AttnO => &blk.attn_o,
             BlkWeight::FfnNorm => &blk.ffn_norm,
             BlkWeight::FfnGateInp => &blk.ffn_gate_inp,

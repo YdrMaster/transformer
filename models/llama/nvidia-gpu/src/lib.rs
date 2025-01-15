@@ -318,6 +318,7 @@ impl<'ctx> WeightLoader for Weights<'ctx> {
         let cache = match which {
             BlkWeight::AttnNorm => &self.blks.attn_norm,
             BlkWeight::AttnQKV => &self.blks.attn_qkv,
+            BlkWeight::AttnQKVBias => &self.blks.attn_qkv_bias,
             BlkWeight::AttnO => &self.blks.attn_o,
             BlkWeight::FfnNorm => &self.blks.ffn_norm,
             BlkWeight::FfnGateInp => &self.blks.ffn_gate_inp,

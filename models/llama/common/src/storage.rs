@@ -176,7 +176,27 @@ impl<'w> BlkStorage<&'w [u8]> {
             attn_qkv_bias: if len == count {
                 borrow(self.attn_qkv_bias)
             } else {
-                todo!()
+                let dq = nh * dh;
+                let dkv = nkvh * dh;
+                let d = dq + 2 * dkv;
+                let total = self.attn_qkv_bias.len();
+                assert_eq!(total % d, 0);
+
+                let (q, kv) = self.attn_qkv_bias.split_at(dq * total / d);
+                let (k, v) = kv.split_at(kv.len() / 2);
+
+                let q = &q[q.len() * start / count..][..q.len() * len / count];
+                let k = &k[k.len() * start / count..][..k.len() * len / count];
+                let v = &v[v.len() * start / count..][..v.len() * len / count];
+
+                let mut ans = f(q.len() + k.len() + v.len());
+                let (q_, kv_) = ans.split_at_mut(q.len());
+                let (k_, v_) = kv_.split_at_mut(kv_.len() / 2);
+                q_.copy_from_slice(q);
+                k_.copy_from_slice(k);
+                v_.copy_from_slice(v);
+
+                own(ans)
             },
             attn_o: if len == count {
                 borrow(self.attn_o)

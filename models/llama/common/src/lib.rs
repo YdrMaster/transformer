@@ -99,6 +99,11 @@ impl LlamaMeta {
         self.mat((nh + nkvh + nkvh) * dh, d, usage)
     }
 
+    pub fn attn_qkv_bias(&self, usage: TensorUsage) -> Tensor<usize> {
+        let &Self { nh, nkvh, dh, .. } = self;
+        self.mat((nh + nkvh + nkvh) * dh, 1, usage)
+    }
+
     pub fn attn_o(&self, usage: TensorUsage) -> Tensor<usize> {
         let &Self { nh, d, dh, .. } = self;
         self.mat(d, nh * dh, usage)

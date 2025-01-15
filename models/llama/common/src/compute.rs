@@ -57,6 +57,7 @@ pub trait Operators {
 pub enum BlkWeight {
     AttnNorm,
     AttnQKV,
+    AttnQKVBias,
     AttnO,
     FfnNorm,
     FfnGateInp,
@@ -151,6 +152,7 @@ where
             max_att_len,
         } = args;
         let LlamaMeta {
+            attn_qkv_bias,
             nblk,
             nh,
             nkvh,
@@ -205,8 +207,16 @@ where
                 let (buf, workspace) = workspace.split_at_mut(*qkv.get());
                 let mut qkv = qkv.clone().map(|_| buf);
 
+                let qkv_add = if attn_qkv_bias {
+                    let bias = self.weights.attn_qkv_bias(iblk, queue).broadcast(0, nt);
+                    self.rearrange(&mut qkv, &bias, workspace, queue_alloc)?;
+                    1.
+                } else {
+                    0.
+                };
+
                 let w = self.weights.attn_qkv(iblk, queue);
-                self.mat_mul(&mut qkv, 0., &x1, &w, 1., workspace, queue_alloc)?;
+                self.mat_mul(&mut qkv, qkv_add, &x1, &w, 1., workspace, queue_alloc)?;
                 drop(w);
 
                 let qkv = qkv.tile(1, &[nh + nkvh + nkvh, dh]);
@@ -593,6 +603,7 @@ where
 struct WeightDecorator<W> {
     norm: Tensor<usize>,
     attn_qkv: Tensor<usize>,
+    attn_qkv_bias: Tensor<usize>,
     attn_o: Tensor<usize>,
     ffn_gate_inp: Tensor<usize>,
     ffn_gate_up: Tensor<usize>,
@@ -608,6 +619,7 @@ impl LlamaMeta {
         WeightDecorator {
             norm: self.norm(),
             attn_qkv: self.attn_qkv(Computation),
+            attn_qkv_bias: self.attn_qkv_bias(Computation),
             attn_o: self.attn_o(Computation),
             ffn_gate_inp: self.ffn_gate_inp(Computation),
             ffn_gate_up: self.ffn_gate_up(Computation),
@@ -638,6 +650,16 @@ impl<W: WeightLoader> WeightDecorator<W> {
     ) -> Tensor<W::Weight<'a>> {
         let w = self.weights.load_blk(BlkWeight::AttnQKV, iblk, queue);
         self.attn_qkv.clone().map(|_| w)
+    }
+
+    #[inline]
+    pub fn attn_qkv_bias<'a>(
+        &'a self,
+        iblk: usize,
+        queue: &'a QueueOf<W::Hardware>,
+    ) -> Tensor<W::Weight<'a>> {
+        let w = self.weights.load_blk(BlkWeight::AttnQKVBias, iblk, queue);
+        self.attn_qkv_bias.clone().map(|_| w)
     }
 
     #[inline]
