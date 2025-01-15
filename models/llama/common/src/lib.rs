@@ -20,7 +20,9 @@ pub mod ext {
 pub struct LlamaMeta {
     pub dt_embd: DigitLayout,
     pub dt_norm: DigitLayout,
-    pub dt_mat: DigitLayout,
+    pub dt_linear: DigitLayout,
+
+    pub attn_qkv_bias: bool,
 
     pub nblk: usize,
     pub nctx: usize,
@@ -123,11 +125,11 @@ impl LlamaMeta {
 
     fn mat(&self, row: usize, col: usize, usage: TensorUsage) -> Tensor<usize> {
         let &Self {
-            dt_embd, dt_mat, ..
+            dt_embd, dt_linear, ..
         } = self;
         // NOTICE: 权重矩阵以 mat 类型存储但以 embd 类型参与计算
         match usage {
-            TensorUsage::Storage => Tensor::new(dt_mat, &[row, col / dt_mat.group_size()]),
+            TensorUsage::Storage => Tensor::new(dt_linear, &[row, col / dt_linear.group_size()]),
             TensorUsage::Computation => {
                 assert_eq!(dt_embd.group_size(), 1);
                 Tensor::new(dt_embd, &[row, col]).transpose(&[1, 0])
@@ -139,14 +141,14 @@ impl LlamaMeta {
         let &Self {
             nexp,
             dt_embd,
-            dt_mat,
+            dt_linear,
             ..
         } = self;
         // NOTICE: 权重矩阵以 mat 类型存储但以 embd 类型参与计算
         match usage {
             TensorUsage::Storage => {
                 let nexp = if nexp == 0 { 1 } else { nexp };
-                Tensor::new(dt_mat, &[nexp, row, col / dt_mat.group_size()])
+                Tensor::new(dt_linear, &[nexp, row, col / dt_linear.group_size()])
             }
             TensorUsage::Computation => {
                 assert_eq!(dt_embd.group_size(), 1);

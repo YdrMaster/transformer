@@ -110,7 +110,7 @@ impl<'w> Weights<'w> {
         let size_gate_up = meta.ffn_gate_up(Computation).take();
         let size_down = meta.ffn_down(Computation).take();
 
-        let weight_cache = if meta.dt_embd == meta.dt_mat {
+        let weight_cache = if meta.dt_embd == meta.dt_linear {
             RefCell::new(WeightCache {
                 cache: Blob::new(0),
                 cached_weight: BlkWeight::AttnQKV,
@@ -123,7 +123,7 @@ impl<'w> Weights<'w> {
                 .unwrap();
             let mut cache = Blob::new(max_size);
             dequant(
-                meta.dt_mat,
+                meta.dt_linear,
                 meta.dt_embd,
                 &blks[0].attn_qkv,
                 &mut cache[..size_qkv],
@@ -141,7 +141,7 @@ impl<'w> Weights<'w> {
             output,
             weight_cache,
             dt_embd: meta.dt_embd,
-            dt_mat: meta.dt_mat,
+            dt_mat: meta.dt_linear,
             nexp: meta.nexp,
             size_qkv,
             size_o,
@@ -225,6 +225,7 @@ impl WeightLoader for Weights<'_> {
         let LlamaBlkStorage {
             attn_norm,
             attn_qkv,
+            attn_qkv_bias: _,
             attn_o,
             ffn_norm,
             ffn_gate_inp,
