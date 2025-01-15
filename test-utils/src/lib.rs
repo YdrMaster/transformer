@@ -142,6 +142,34 @@ pub fn test_infer(
         }};
     }
 
+    let maybe_file = Path::new(prompt);
+    if maybe_file.is_file() {
+        let file = std::fs::read_to_string(maybe_file).unwrap();
+        for line in file.lines() {
+            let line = serde_json::from_str::<String>(line).unwrap();
+            let prompt = format!("<s>{line}\n");
+
+            // print_now!("{prompt}");
+
+            let mut tokens = tokenizer.encode(&prompt);
+            let mut pos = 0;
+            for _ in 0..max_steps {
+                let next = lm(&tokens, pos);
+
+                pos += tokens.len();
+                if next == eos {
+                    break;
+                }
+
+                let piece = tokenizer.decode(next);
+                print_now!("{piece}");
+                tokens = vec![next];
+            }
+            println!()
+        }
+        return;
+    }
+
     print_now!("{prompt}");
 
     let mut tokens = tokenizer.encode(prompt);
