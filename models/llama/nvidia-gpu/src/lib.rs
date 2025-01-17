@@ -244,6 +244,7 @@ impl<'blk> Weights<'blk> {
                 load! {
                     attn_norm
                     attn_qkv
+                    attn_qkv_bias
                     attn_o
                     ffn_norm
                     ffn_gate_inp

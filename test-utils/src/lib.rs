@@ -145,27 +145,50 @@ pub fn test_infer(
     let maybe_file = Path::new(prompt);
     if maybe_file.is_file() {
         let file = std::fs::read_to_string(maybe_file).unwrap();
+        let mut correct = 0;
+        let mut total = 0;
         for line in file.lines() {
-            let line = serde_json::from_str::<String>(line).unwrap();
-            let prompt = format!("<s>{line}\n");
-
-            // print_now!("{prompt}");
+            let line =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(line).unwrap();
+            let serde_json::Value::String(prompt) = &line["origin_prompt"] else {
+                unreachable!()
+            };
+            let serde_json::Value::String(gold) = &line["gold"] else {
+                unreachable!()
+            };
 
             let mut tokens = tokenizer.encode(&prompt);
+            let mut ans = String::new();
             let mut pos = 0;
+            let mut result = false;
             for _ in 0..max_steps {
                 let next = lm(&tokens, pos);
-
-                pos += tokens.len();
                 if next == eos {
                     break;
                 }
 
-                let piece = tokenizer.decode(next);
-                print_now!("{piece}");
+                pos += tokens.len();
                 tokens = vec![next];
+
+                let piece = tokenizer.decode(next);
+                ans.push_str(&piece);
+
+                if let Some(x) = piece.chars().find(|c| matches!(c, 'A'..='D')) {
+                    result = x == gold.chars().next().unwrap();
+                    break;
+                }
             }
-            println!()
+
+            if result {
+                correct += 1
+            }
+            total += 1;
+
+            println!(
+                "({correct:>4}/{total:<4} {:6.2}%) {} {gold} {ans}",
+                100. * (correct as f64 / total as f64),
+                if result { "✔" } else { "✘" },
+            )
         }
         return;
     }
