@@ -9,7 +9,7 @@ members = [
     "models/llama/common-cpu",
     "models/llama/opencl",
     "models/llama/infini",
-    "models/llama/nvidia-gpu",
+    "models/llama/cuda",
 
     "models/clip/common",
     "models/clip/common-cpu",

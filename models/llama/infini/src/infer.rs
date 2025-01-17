@@ -72,6 +72,10 @@ fn test_infer() {
             infini_rt::init(infini_rt::DEVICE_NVIDIA);
             WorkerSeed::new(InfiniNode::nv_gpu(&indices))
         }
+        "cambricon" => {
+            infini_rt::init(infini_rt::DEVICE_CAMBRICON);
+            WorkerSeed::new(InfiniNode::cambricon_mlu(&indices))
+        }
         "ascend" => {
             infini_rt::init(infini_rt::DEVICE_ASCEND);
             WorkerSeed::new(InfiniNode::ascend_npu(&indices))

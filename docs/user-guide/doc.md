@@ -166,6 +166,6 @@ cargo test --release --package `model` --lib -- `test` --exact --nocapture
 | `llama-cpu`    | `infer::test_infer`         | 默认值“1”。任意间隔的正整数数组，表示每个线程分布模型的份数，数组的项数必须是 2 的幂 | 纯 cpu 后端，不需要任何额外依赖
 | `llama-infini` | `infer::test_infer`         | 默认值“cpu;0”。格式“硬件类型; 卡号”，硬件类型目前支持 `cpu`、`nv`、`ascend` | 九源统一软件栈后端
 | `llama-cl`     | `infer::test_infer`         | TODO | OpenCL 后端
-| `llama-nv`     | `infer::test_infer`         | 默认值“0”。单个非负整数，推理使用的卡号 | 原生 CUDA Toolkit 后端
-| `llama-nv`     | `nccl_parallel::test_infer` | 默认值“0”。任意间隔的非负整数集合，参与分布式推理的卡号 | 原生 CUDA Toolkit 后端，同时依赖 NCCL 实现分布式
+| `llama-cuda`   | `infer::test_infer`         | 默认值“0”。单个非负整数，推理使用的卡号 | 原生 CUDA Toolkit 后端
+| `llama-cuda`   | `nccl_parallel::test_infer` | 默认值“0”。任意间隔的非负整数集合，参与分布式推理的卡号 | 原生 CUDA Toolkit 后端，同时依赖 NCCL 实现分布式
 | `gpt2-cpu`     | `infer::test_infer`         | TODO | 纯 cpu 后端，不需要任何额外依赖
