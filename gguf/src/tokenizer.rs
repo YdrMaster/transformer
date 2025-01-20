@@ -45,14 +45,18 @@ impl Tokenizer {
 
     pub fn decode(&self, token: utok) -> Cow<str> {
         let piece = self.tokenize.decode(token);
-        let ans = piece
-            .chars()
-            .map(|c| *self.de_replace.get(&c).unwrap_or(&c))
-            .collect::<String>();
-        if ans == piece {
-            piece.into()
+        if let Ok(piece) = from_utf8(piece) {
+            let ans = piece
+                .chars()
+                .map(|c| *self.de_replace.get(&c).unwrap_or(&c))
+                .collect::<String>();
+            if ans == piece {
+                piece.into()
+            } else {
+                ans.into()
+            }
         } else {
-            ans.into()
+            unsafe { from_utf8_unchecked(piece) }.into()
         }
     }
 
@@ -133,7 +137,7 @@ trait Tokenize {
     /// Encode a text into a sequence of tokens.
     fn encode(&self, text: &str) -> Vec<utok>;
     /// Decode a token into str.
-    fn decode(&self, token: utok) -> &str;
+    fn decode(&self, token: utok) -> &[u8];
 }
 
 impl<M: tokeneer::Method> Tokenize for Tokeneer<M> {
@@ -142,8 +146,8 @@ impl<M: tokeneer::Method> Tokenize for Tokeneer<M> {
         self.encode(text)
     }
     #[inline]
-    fn decode(&self, token: utok) -> &str {
-        unsafe { from_utf8_unchecked(self.internal().decode(token)) }
+    fn decode(&self, token: utok) -> &[u8] {
+        self.internal().decode(token)
     }
 }
 
