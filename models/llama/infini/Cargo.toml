@@ -9,6 +9,7 @@ authors = ["YdrMaster <ydrml@hotmail.com>"]
 [dependencies]
 llama.path = "../common"
 common.workspace = true
+log.workspace = true
 operators = { workspace = true, features = ["infini"] }
 
 [build-dependencies]

@@ -1,4 +1,5 @@
 ﻿use crate::{Operators, RandomSample, Weights};
+use common::Distribution;
 use gguf::{ggml_quants::digit_layout::types, GGufModel};
 use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
 use operators::{
@@ -11,6 +12,7 @@ use regex::Regex;
 use std::{
     iter::zip,
     slice::{from_raw_parts, from_raw_parts_mut},
+    sync::{Arc, Barrier},
     thread,
 };
 use test_utils::{test_infer_paralle, Inference, Task, TokenizerAndPrompt, WorkerSeed};
@@ -60,7 +62,7 @@ fn test_infer() {
         })
         .unwrap_or_else(|| ("cpu".into(), vec![0]));
     let lens = vec![1; indices.len()];
-    let count = indices.len();
+    let dist = indices.len();
     println!("{ty}; distribution: {indices:?}");
 
     let (seeds, senders) = match &*ty {
@@ -82,23 +84,24 @@ fn test_infer() {
         }
         _ => todo!(),
     };
+    let barrier = Arc::new(Barrier::new(dist + 1));
     thread::scope(|s| {
         let _workers = zip(lens, seeds)
             .enumerate()
             .scan(0, |start, (id, (len, seed))| {
-                let range = *start..*start + len;
-                *start = range.end;
+                let dist = Distribution::new(*start, len, dist);
+                *start += len;
 
-                let mut meta = model.meta.clone();
-                meta.distribute(range.clone(), count);
-
+                let meta = model.meta.distribute(dist);
                 let model = &model;
+                let barrier = barrier.clone();
                 Some(s.spawn(move || {
                     let WorkerSeed { node, tasks } = seed;
                     let device = node.processor();
-                    let stream = device.stream();
-                    let weights = Weights::new(model, range, count, &stream);
+                    let weights = Weights::new(model, dist, device);
                     let mut worker = Worker::new(id, &node, meta.clone(), weights);
+
+                    let stream = device.stream();
                     let mut cache = meta
                         .kv_cache(meta.nctx)
                         .map(|size| stream.malloc::<u8>(size));
@@ -111,7 +114,7 @@ fn test_infer() {
 
                     let sample = RandomSample::new(&node);
                     let indices = RandomSample::build_indices(model.meta.nvoc, &stream);
-
+                    barrier.wait();
                     for task in tasks {
                         let Task {
                             nt,
@@ -170,6 +173,7 @@ fn test_infer() {
             .collect::<Vec<_>>();
 
         let senders = senders.into_boxed_slice();
+        barrier.wait();
         test_infer_paralle(&model, senders, eos, tokenizer, &prompt, max_steps)
     })
 }

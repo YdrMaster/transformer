@@ -1,4 +1,5 @@
 use crate::{Operators, RandomSample, Weights};
+use common::Distribution;
 use gguf::GGufModel;
 use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
 use log::info;
@@ -13,6 +14,7 @@ use regex::Regex;
 use std::{
     iter::zip,
     slice::{from_raw_parts, from_raw_parts_mut},
+    sync::{Arc, Barrier},
     thread, u64,
 };
 use test_utils::{test_infer_paralle, Inference, Task, TokenizerAndPrompt, WorkerSeed};
@@ -58,7 +60,7 @@ fn test_infer() {
         })
         .unwrap_or_else(|| vec![0]);
     let lens = vec![1; devices.len()];
-    let count = devices.len();
+    let dist = devices.len();
     println!("distribution: {devices:?}");
 
     let (seeds, senders) = match cuda::init() {
@@ -71,17 +73,17 @@ fn test_infer() {
         ),
         Err(NoDevice) => return,
     };
+    let barrier = Arc::new(Barrier::new(dist + 1));
     thread::scope(|s| {
         let _workers = zip(lens, seeds)
             .enumerate()
             .scan(0, |start, (id, (len, seed))| {
-                let range = *start..*start + len;
-                *start = range.end;
+                let dist = Distribution::new(*start, len, dist);
+                *start += len;
 
-                let mut meta = model.meta.clone();
-                meta.distribute(range.clone(), count);
-
+                let meta = model.meta.distribute(dist);
                 let model = &model;
+                let barrir = barrier.clone();
                 Some(s.spawn(move || {
                     info!("worker[{id}] started");
                     let WorkerSeed { node, tasks } = seed;
@@ -93,7 +95,7 @@ fn test_infer() {
                         let _ = stream.malloc::<u8>((free.0 >> 30).saturating_sub(1) << 30);
 
                         info!("worker[{id}] loading weights...");
-                        let weights = Weights::new(model, range, count, usize::MAX, ctx);
+                        let weights = Weights::new(model, dist, ctx);
                         let mut worker = Worker::new(id, &node, meta.clone(), weights);
                         info!("worker[{id}] created");
                         let mut cache = meta
@@ -111,6 +113,7 @@ fn test_infer() {
                         let mut pair = KVPair::new(0, f16::ZERO);
                         let mut pairs = Tensor::kv_pair_vec(1, |size| stream.malloc::<u8>(size));
 
+                        barrir.wait();
                         for task in tasks {
                             let Task {
                                 nt,
@@ -177,6 +180,7 @@ fn test_infer() {
             .collect::<Vec<_>>();
 
         let senders = senders.into_boxed_slice();
+        barrier.wait();
         test_infer_paralle(&model, senders, eos, tokenizer, &prompt, max_steps)
     })
 }

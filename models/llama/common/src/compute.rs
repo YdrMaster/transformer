@@ -1,4 +1,4 @@
-use super::{args::Args, LlamaMeta};
+use super::{args::Args, LlamaBlkWeight, LlamaMeta};
 use gguf::ggml_quants::{
     digit_layout::{types as ty, DigitLayout},
     f16,
@@ -53,18 +53,6 @@ pub trait Operators {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BlkWeight {
-    AttnNorm,
-    AttnQKV,
-    AttnQKVBias,
-    AttnO,
-    FfnNorm,
-    FfnGateInp,
-    FfnGateUp,
-    FfnDown,
-}
-
 pub trait WeightLoader {
     type Hardware: Hardware;
     type Weight<'s>: Deref<Target = [ByteOf<Self::Hardware>]> + 's
@@ -73,14 +61,14 @@ pub trait WeightLoader {
 
     fn load_blk<'a>(
         &'a self,
-        which: BlkWeight,
+        which: LlamaBlkWeight,
         iblk: usize,
         queue: &'a QueueOf<Self::Hardware>,
     ) -> Self::Weight<'a>;
 
     fn load_moe<'a>(
         &'a self,
-        which: BlkWeight,
+        which: LlamaBlkWeight,
         iblk: usize,
         iexp: usize,
         queue: &'a QueueOf<Self::Hardware>,
@@ -91,9 +79,9 @@ pub trait WeightLoader {
 }
 
 pub struct LlamaWorker<Ops: Operators, W> {
-    #[allow(dead_code)]
     id: usize,
     meta: LlamaMeta,
+    dt_pos: DigitLayout,
     weights: WeightDecorator<W>,
     rms_norm: Ops::RmsNorm,
     mat_mul: Ops::MatMul,
@@ -111,6 +99,7 @@ impl<Ops: Operators, W> LlamaWorker<Ops, W> {
             id,
             weights: meta.decorator(weights),
             meta,
+            dt_pos: ty::U64,
             rms_norm: Ops::RmsNorm::new(processor),
             mat_mul: Ops::MatMul::new(processor),
             rope: Ops::Rope::new(processor),
@@ -124,6 +113,20 @@ impl<Ops: Operators, W> LlamaWorker<Ops, W> {
     #[inline]
     pub const fn meta(&self) -> &LlamaMeta {
         &self.meta
+    }
+
+    pub fn use_u64_pos(self) -> Self {
+        Self {
+            dt_pos: ty::U64,
+            ..self
+        }
+    }
+
+    pub fn use_u32_pos(self) -> Self {
+        Self {
+            dt_pos: ty::U32,
+            ..self
+        }
     }
 }
 
@@ -182,9 +185,9 @@ where
         let sin = sin_cos.clone().index(0, 0);
         let cos = sin_cos.index(0, 1);
 
-        let pos = Tensor::new(ty::U64, &[nt]).map(|_| {
+        let pos = Tensor::new(self.dt_pos, &[nt]).map(|_| {
             Ops::Rope::build_pos(
-                ty::U64,
+                self.dt_pos,
                 nt,
                 requests.iter().map(|req| Seq {
                     pos: req.pos,
@@ -638,7 +641,7 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        let w = self.weights.load_blk(BlkWeight::AttnNorm, iblk, queue);
+        let w = self.weights.load_blk(LlamaBlkWeight::AttnNorm, iblk, queue);
         self.norm.clone().map(|_| w)
     }
 
@@ -648,7 +651,7 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        let w = self.weights.load_blk(BlkWeight::AttnQKV, iblk, queue);
+        let w = self.weights.load_blk(LlamaBlkWeight::AttnQKV, iblk, queue);
         self.attn_qkv.clone().map(|_| w)
     }
 
@@ -658,7 +661,9 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        let w = self.weights.load_blk(BlkWeight::AttnQKVBias, iblk, queue);
+        let w = self
+            .weights
+            .load_blk(LlamaBlkWeight::AttnQKVBias, iblk, queue);
         self.attn_qkv_bias.clone().map(|_| w)
     }
 
@@ -668,7 +673,7 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        let w = self.weights.load_blk(BlkWeight::AttnO, iblk, queue);
+        let w = self.weights.load_blk(LlamaBlkWeight::AttnO, iblk, queue);
         self.attn_o.clone().map(|_| w)
     }
 
@@ -678,7 +683,7 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        let w = self.weights.load_blk(BlkWeight::FfnNorm, iblk, queue);
+        let w = self.weights.load_blk(LlamaBlkWeight::FfnNorm, iblk, queue);
         self.norm.clone().map(|_| w)
     }
 
@@ -688,7 +693,9 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iblk: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        let w = self.weights.load_blk(BlkWeight::FfnGateInp, iblk, queue);
+        let w = self
+            .weights
+            .load_blk(LlamaBlkWeight::FfnGateInp, iblk, queue);
         self.ffn_gate_inp.clone().map(|_| w)
     }
 
@@ -699,7 +706,7 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iexp: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        const WHICH: BlkWeight = BlkWeight::FfnGateUp;
+        const WHICH: LlamaBlkWeight = LlamaBlkWeight::FfnGateUp;
         let w = if self.is_moe {
             self.weights.load_moe(WHICH, iblk, iexp, queue)
         } else {
@@ -715,7 +722,7 @@ impl<W: WeightLoader> WeightDecorator<W> {
         iexp: usize,
         queue: &'a QueueOf<W::Hardware>,
     ) -> Tensor<W::Weight<'a>> {
-        const WHICH: BlkWeight = BlkWeight::FfnDown;
+        const WHICH: LlamaBlkWeight = LlamaBlkWeight::FfnDown;
         let w = if self.is_moe {
             self.weights.load_moe(WHICH, iblk, iexp, queue)
         } else {

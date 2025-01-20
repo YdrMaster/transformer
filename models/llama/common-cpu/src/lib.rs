@@ -1,7 +1,7 @@
-use common::Contiguous;
+use common::{Contiguous, Distribution};
 use llama::{
     ext::ggml_quants::{self, digit_layout::DigitLayout, f16, DataBlock, QuantExt},
-    BlkWeight, LlamaBlkStorage, LlamaStorage, Tensor,
+    LlamaBlkStorage, LlamaBlkWeight, LlamaStorage, Tensor,
     TensorUsage::Computation,
     WeightLoader,
 };
@@ -16,7 +16,7 @@ use std::{
     cell::{Ref, RefCell},
     marker::PhantomData,
     mem::size_of,
-    ops::{Deref, Range, RangeBounds},
+    ops::{Deref, Range},
     ptr::copy_nonoverlapping,
     slice::{from_raw_parts, from_raw_parts_mut},
 };
@@ -41,7 +41,7 @@ pub struct Weights<'w> {
 
 pub struct WeightCache {
     cache: Blob,
-    cached_weight: BlkWeight,
+    cached_weight: LlamaBlkWeight,
     cached_weight_iblk: usize,
 }
 
@@ -85,11 +85,7 @@ where
 }
 
 impl<'w> Weights<'w> {
-    pub fn new(
-        model: &'w LlamaStorage<&'w [u8]>,
-        range: impl RangeBounds<usize> + Clone,
-        count: usize,
-    ) -> Self {
+    pub fn new(model: &'w LlamaStorage<&'w [u8]>, dist: Distribution) -> Self {
         let LlamaStorage {
             meta,
             output_norm,
@@ -100,11 +96,18 @@ impl<'w> Weights<'w> {
 
         let blks = blocks
             .iter()
-            .map(|blk| blk.distribute(meta, range.clone(), count, Blob::new))
+            .map(|blk| {
+                blk.clone()
+                    .into_vec()
+                    .into_iter()
+                    .map(|(which, data)| {
+                        (which, meta.distribute_data(which, data, dist, Blob::new))
+                    })
+                    .collect::<LlamaBlkStorage<_>>()
+            })
             .collect::<Box<_>>();
 
-        let mut meta = meta.clone();
-        meta.distribute(range.clone(), count);
+        let meta = meta.distribute(dist);
         let size_qkv = meta.attn_qkv(Computation).take();
         let size_o = meta.attn_o(Computation).take();
         let size_gate_up = meta.ffn_gate_up(Computation).take();
@@ -113,7 +116,7 @@ impl<'w> Weights<'w> {
         let weight_cache = if meta.dt_embd == meta.dt_linear {
             RefCell::new(WeightCache {
                 cache: Blob::new(0),
-                cached_weight: BlkWeight::AttnQKV,
+                cached_weight: LlamaBlkWeight::AttnQKV,
                 cached_weight_iblk: 0,
             })
         } else {
@@ -131,7 +134,7 @@ impl<'w> Weights<'w> {
 
             RefCell::new(WeightCache {
                 cache,
-                cached_weight: BlkWeight::AttnQKV,
+                cached_weight: LlamaBlkWeight::AttnQKV,
                 cached_weight_iblk: 0,
             })
         };
@@ -207,7 +210,7 @@ impl WeightLoader for Weights<'_> {
     #[inline]
     fn load_blk(
         &self,
-        which: BlkWeight,
+        which: LlamaBlkWeight,
         iblk: usize,
         _queue: &QueueOf<Self::Hardware>,
     ) -> Self::Weight<'_> {
@@ -233,10 +236,10 @@ impl WeightLoader for Weights<'_> {
             ffn_down,
         } = &blks[iblk];
 
-        use BlkWeight::{
+        use Dequant::{Borrowed, Cached};
+        use LlamaBlkWeight::{
             AttnNorm, AttnO, AttnQKV, AttnQKVBias, FfnDown, FfnGateInp, FfnGateUp, FfnNorm,
         };
-        use Dequant::{Borrowed, Cached};
 
         #[rustfmt::skip]
         match which {
@@ -301,7 +304,7 @@ impl WeightLoader for Weights<'_> {
 
     fn load_moe<'a>(
         &'a self,
-        which: BlkWeight,
+        which: LlamaBlkWeight,
         iblk: usize,
         iexp: usize,
         _queue: &'a QueueOf<Self::Hardware>,
@@ -315,8 +318,8 @@ impl WeightLoader for Weights<'_> {
         } = self;
         assert_eq!(dt_embd, dt_mat);
         let w = match which {
-            BlkWeight::FfnGateUp => &*blks[iblk].ffn_gate_up,
-            BlkWeight::FfnDown => &*blks[iblk].ffn_down,
+            LlamaBlkWeight::FfnGateUp => &*blks[iblk].ffn_gate_up,
+            LlamaBlkWeight::FfnDown => &*blks[iblk].ffn_down,
             _ => unreachable!(),
         };
         let one = w.len() / nexp;

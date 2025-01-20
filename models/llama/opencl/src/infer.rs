@@ -1,4 +1,5 @@
 ﻿use crate::{Operators, RandomSample, Weights};
+use common::Distribution;
 use gguf::GGufModel;
 use llama::{
     ext::ggml_quants::f16, LlamaArgs, LlamaMeta, LlamaRequest, LlamaStorage, LlamaWorker, Tensor,
@@ -16,6 +17,7 @@ type Worker = LlamaWorker<Operators, Weights>;
 fn test_infer() {
     let Some(Inference {
         model,
+        devices,
         prompt,
         as_user,
         temperature,
@@ -50,13 +52,14 @@ fn test_infer() {
         ..
     } = meta;
 
-    let Ok(target_device) = std::env::var("TARGET_DEVICE") else {
-        return;
-    };
     let Some(context) = Platform::all()
         .into_iter()
         .flat_map(|platform| platform.devices())
-        .find(|d| d.name().contains(&target_device))
+        .find(|d| {
+            devices
+                .as_ref()
+                .is_none_or(|filter| d.name().contains(&*filter))
+        })
         .map(|d| d.context())
     else {
         return;
@@ -64,8 +67,8 @@ fn test_infer() {
     let cl_dev = ClDevice::new(context.clone());
     let queue = context.queue();
 
-    let weights = Weights::new(&model, .., 1, &queue);
-    let mut worker = Worker::new(0, &cl_dev, model.meta.clone(), weights);
+    let weights = Weights::new(&model, Distribution::MONO, &context);
+    let mut worker = Worker::new(0, &cl_dev, model.meta.clone(), weights).use_u32_pos();
     let mut cache = model
         .meta
         .kv_cache(nctx)

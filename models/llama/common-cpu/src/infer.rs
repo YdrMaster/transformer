@@ -1,4 +1,5 @@
 ﻿use crate::{Operators, RandomSample, Weights};
+use common::Distribution;
 use gguf::GGufModel;
 use llama::{ext::ggml_quants::f16, LlamaRequest, LlamaStorage, LlamaWorker, Tensor};
 use operators::{
@@ -8,7 +9,13 @@ use operators::{
     Blob,
 };
 use regex::Regex;
-use std::{iter::zip, ptr::copy_nonoverlapping, slice::from_raw_parts_mut, thread};
+use std::{
+    iter::zip,
+    ptr::copy_nonoverlapping,
+    slice::from_raw_parts_mut,
+    sync::{Arc, Barrier},
+    thread,
+};
 use test_utils::{test_infer_paralle, Inference, Task, TokenizerAndPrompt, WorkerSeed};
 
 type Worker<'w> = LlamaWorker<Operators<InprocNode<usize>, AllReduce>, Weights<'w>>;
@@ -51,24 +58,24 @@ fn test_infer() {
                 .collect()
         })
         .unwrap_or_else(|| vec![1]);
-    let count = lens.iter().sum();
+    let dist = lens.iter().sum();
     println!("distribution: {lens:?}");
 
     let (seeds, senders) = WorkerSeed::new(InprocNode::new(lens.len()));
+    let barrier = Arc::new(Barrier::new(dist + 1));
     thread::scope(|s| {
         let _workers = zip(lens, seeds)
             .enumerate()
             .scan(0, |start, (id, (len, seed))| {
-                let range = *start..*start + len;
-                *start = range.end;
+                let dist = Distribution::new(*start, len, dist);
+                *start += len;
 
-                let mut meta = model.meta.clone();
-                meta.distribute(range.clone(), count);
-
+                let meta = model.meta.distribute(dist);
                 let model = &model;
+                let barrier = barrier.clone();
                 Some(s.spawn(move || {
                     let WorkerSeed { node, tasks } = seed;
-                    let weights = Weights::new(model, range, count);
+                    let weights = Weights::new(model, dist);
                     let mut worker = Worker::new(id, &node, meta.clone(), weights);
                     let mut cache = meta.kv_cache(meta.nctx).map(Blob::new);
                     let sin_cos = <Operators as llama::Operators>::build_sin_cos(
@@ -85,6 +92,7 @@ fn test_infer() {
                         from_raw_parts_mut(&mut pair as *mut _ as *mut u8, size_of_val(&pair))
                     });
 
+                    barrier.wait();
                     for task in tasks {
                         let Task {
                             nt,
@@ -137,6 +145,7 @@ fn test_infer() {
             .collect::<Vec<_>>();
 
         let senders = senders.into_boxed_slice();
+        barrier.wait();
         test_infer_paralle(&model, senders, eos, tokenizer, &prompt, max_steps)
     })
 }

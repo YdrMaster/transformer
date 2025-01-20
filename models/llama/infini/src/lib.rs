@@ -1,30 +1,26 @@
 #![cfg(detected)]
 
-use common::Contiguous;
-use llama::{BlkWeight, LlamaBlkStorage, LlamaStorage, Tensor, WeightLoader};
+use common::{Contiguous, Distribution, Slab, WeightMemCalculator};
+use llama::{LlamaBlkStorage, LlamaBlkWeight, LlamaStorage, Tensor, WeightLoader};
+use log::trace;
 use operators::{
     all_reduce::{infini::Operator as InfiniAllReduce, AllReduce},
     infini::{Device, InfiniNode},
-    infini_rt::{DevBlob, DevByte, Event, HostBlob, Stream},
+    infini_rt::{DevBlob, DevByte},
     random_sample::infini::Operator as RandomSampleNpu,
     ByteOf, QueueOf, TopoNode,
 };
 use std::{
+    collections::VecDeque,
+    iter::zip,
     marker::PhantomData,
-    mem::replace,
-    ops::{Deref, RangeBounds},
+    ops::{Deref, Range},
+    time::Instant,
 };
 
 pub struct Operators<N = InfiniNode, R = InfiniAllReduce>(PhantomData<(N, R)>);
 
 pub type RandomSample = llama::RandomSample<Device, RandomSampleNpu>;
-
-pub struct Weights {
-    nexp: usize,
-    blks: Box<[LlamaBlkStorage<DevBlob>]>,
-    output_norm: DevBlob,
-    output: DevBlob,
-}
 
 macro_rules! op {
     ($name:ident) => {
@@ -69,134 +65,153 @@ where
     }
 }
 
+pub struct Weights {
+    nexp: usize,
+    mem: DevBlob,
+    blks: Box<[LlamaBlkStorage<Range<usize>>]>,
+    output_norm: Range<usize>,
+    output: Range<usize>,
+}
+
 impl Weights {
-    pub fn new(
-        model: &LlamaStorage<&'_ [u8]>,
-        range: impl RangeBounds<usize> + Clone,
-        count: usize,
-        stream: &Stream,
-    ) -> Self {
-        let device = stream.get_device();
-        let mut loader = None;
-        Self {
-            nexp: model.meta.nexp,
-            blks: model
-                .blocks
-                .iter()
-                .map(|blk| {
-                    let blk = blk.distribute(&model.meta, range.clone(), count, |len| {
-                        device.malloc_host::<u8>(len)
-                    });
-                    let loader = loader.get_or_insert_with(|| {
-                        blk.as_ref().map(|s| H2DLoader::new(s.len(), stream))
-                    });
-                    macro_rules! load {
-                        ($( $ident:ident )+ ) => {
-                            LlamaBlkStorage{
-                                $( $ident: loader.$ident.load(blk.$ident, stream) ),+
-                            }
-                        };
-                    }
-                    load! {
-                        attn_norm
-                        attn_qkv
-                        attn_qkv_bias
-                        attn_o
-                        ffn_norm
-                        ffn_gate_inp
-                        ffn_gate_up
-                        ffn_down
-                    }
-                })
-                .collect(),
-            output_norm: device.from_host(model.output_norm),
-            output: device.from_host(model.output),
+    pub fn new(model: &LlamaStorage<&[u8]>, dist: Distribution, dev: &Device) -> Self {
+        let LlamaStorage {
+            meta,
+            output_norm,
+            output,
+            blocks,
+            ..
+        } = model;
+
+        let mut calculator = WeightMemCalculator::new(size_of::<usize>());
+        let meta_dist = meta.distribute(dist);
+        let blk_size = meta_dist.blk();
+        let off_blks = (0..meta_dist.nblk)
+            .map(|_| {
+                blk_size
+                    .clone()
+                    .into_vec()
+                    .into_iter()
+                    .map(|(which, size)| (which, calculator.push(size)))
+                    .collect::<LlamaBlkStorage<_>>()
+            })
+            .collect::<Vec<_>>();
+        let off_output_norm = calculator.push(output_norm.len());
+        let off_output = calculator.push(output.len());
+
+        let mut mem = dev.malloc::<u8>(calculator.size());
+        let mut slab = Slab::<usize, _>::new();
+        let mut queue = VecDeque::new();
+        let stream = dev.stream();
+
+        macro_rules! host {
+            ($l:expr) => {
+                slab.take(&$l).unwrap_or_else(|| dev.malloc_host::<u8>($l))
+            };
         }
-    }
-}
 
-struct H2DLoader {
-    event: Event,
-    host: HostBlob,
-    dev: DevBlob,
-}
+        for (blk, off) in zip(blocks, off_blks.clone()) {
+            let blk = blk.clone().into_vec();
+            let off = off.into_vec();
+            for ((which, data), (which_, off)) in zip(blk, off) {
+                assert_eq!(which, which_);
+                if off.is_empty() {
+                    continue;
+                }
+                let data = meta.distribute_data(which, data, dist, |l| host!(l));
+                let data = match data {
+                    Contiguous::Borrowed(data) => {
+                        let mut mem = host!(data.len());
+                        mem.copy_from_slice(data);
+                        mem
+                    }
+                    Contiguous::Owned(data) => data,
+                };
+                stream.memcpy_h2d(&mut mem[off], &data);
+                let mut event = dev.event();
+                stream.record(&mut event);
+                queue.push_back((event, Instant::now(), data))
+            }
 
-impl H2DLoader {
-    fn new(size: usize, stream: &Stream) -> Self {
-        let device = stream.get_device();
-        let mut event = device.event();
-        stream.record(&mut event);
-        Self {
-            event,
-            host: device.malloc_host::<u8>(size),
-            dev: device.malloc::<u8>(size),
+            while let Some((event, _, _)) = queue.front() {
+                if event.is_complete() {
+                    let (_, time, data) = queue.pop_front().unwrap();
+                    trace!("{:>16}bytes copied in {:?}", data.len(), time.elapsed());
+                    slab.put(data.len(), data)
+                } else {
+                    break;
+                }
+            }
         }
-    }
+        stream.memcpy_h2d(&mut mem[off_output_norm.clone()], output_norm);
+        stream.memcpy_h2d(&mut mem[off_output.clone()], output);
 
-    fn load(&mut self, host: Contiguous<HostBlob>, stream: &Stream) -> DevBlob {
-        self.event.synchronize();
-        match host {
-            Contiguous::Borrowed(host) => self.host.copy_from_slice(host),
-            Contiguous::Owned(host) => self.host = host,
-        };
-        stream.memcpy_h2d(&mut self.dev, &self.host);
-        stream.record(&mut self.event);
-        replace(&mut self.dev, stream.malloc::<u8>(self.host.len()))
+        Self {
+            nexp: meta.nexp,
+            mem,
+            blks: off_blks.into_boxed_slice(),
+            output_norm: off_output_norm,
+            output: off_output,
+        }
     }
 }
 
 impl WeightLoader for Weights {
     type Hardware = Device;
+
     type Weight<'s>
         = &'s [DevByte]
     where
         Self: 's;
 
-    #[inline]
-    fn load_blk(
-        &self,
-        which: BlkWeight,
+    fn load_blk<'a>(
+        &'a self,
+        which: LlamaBlkWeight,
         iblk: usize,
-        _queue: &QueueOf<Self::Hardware>,
-    ) -> Self::Weight<'_> {
-        let blk = &self.blks[iblk];
-        match which {
-            BlkWeight::AttnNorm => &blk.attn_norm,
-            BlkWeight::AttnQKV => &blk.attn_qkv,
-            BlkWeight::AttnQKVBias => &blk.attn_qkv_bias,
-            BlkWeight::AttnO => &blk.attn_o,
-            BlkWeight::FfnNorm => &blk.ffn_norm,
-            BlkWeight::FfnGateInp => &blk.ffn_gate_inp,
-            BlkWeight::FfnGateUp => &blk.ffn_gate_up,
-            BlkWeight::FfnDown => &blk.ffn_down,
-        }
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> Self::Weight<'a> {
+        let off = &self.blks[iblk];
+        use LlamaBlkWeight as W;
+        #[rustfmt::skip]
+        let off = match which {
+            W::AttnNorm    => &off.attn_norm    ,
+            W::AttnQKV     => &off.attn_qkv     ,
+            W::AttnQKVBias => &off.attn_qkv_bias,
+            W::AttnO       => &off.attn_o       ,
+            W::FfnNorm     => &off.ffn_norm     ,
+            W::FfnGateInp  => &off.ffn_gate_inp ,
+            W::FfnGateUp   => &off.ffn_gate_up  ,
+            W::FfnDown     => &off.ffn_down     ,
+        };
+        &self.mem[off.clone()]
     }
 
     fn load_moe<'a>(
         &'a self,
-        which: BlkWeight,
+        which: LlamaBlkWeight,
         iblk: usize,
         iexp: usize,
         _queue: &'a QueueOf<Self::Hardware>,
     ) -> Self::Weight<'a> {
-        let blk = &self.blks[iblk];
-        let w = match which {
-            BlkWeight::FfnGateUp => &blk.ffn_gate_up,
-            BlkWeight::FfnDown => &blk.ffn_down,
-            _ => unreachable!(),
+        let off = &self.blks[iblk];
+        use LlamaBlkWeight as W;
+        #[rustfmt::skip]
+        let off = match which {
+            W::FfnGateUp => &off.ffn_gate_up,
+            W::FfnDown   => &off.ffn_down   ,
+            _            => unreachable!()  ,
         };
+        let w = &self.mem[off.clone()];
         let one = w.len() / self.nexp;
         &w[iexp * one..][..one]
     }
 
-    #[inline]
-    fn output_norm(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Weight<'_> {
-        &self.output_norm
+    fn output_norm<'a>(&'a self, _queue: &'a QueueOf<Self::Hardware>) -> Self::Weight<'a> {
+        &self.mem[self.output_norm.clone()]
     }
 
-    #[inline]
-    fn output(&self, _queue: &QueueOf<Self::Hardware>) -> Self::Weight<'_> {
-        &self.output
+    fn output<'a>(&'a self, _queue: &'a QueueOf<Self::Hardware>) -> Self::Weight<'a> {
+        &self.mem[self.output.clone()]
     }
 }
 
