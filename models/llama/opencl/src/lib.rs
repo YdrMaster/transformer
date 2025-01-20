@@ -1,27 +1,20 @@
 #![cfg(detected)]
 
-use common::Contiguous;
-use llama::{BlkWeight, LlamaStorage, Tensor, WeightLoader};
+use common::Distribution;
+use llama::{LlamaBlkStorage, LlamaBlkWeight, LlamaStorage, Tensor, WeightLoader};
 use operators::{
     all_reduce::{AllReduce, NonAllReduce},
-    clrt::{CommandQueue, Invalid, SvmBlob, SvmByte},
+    clrt::{SvmBlob, SvmByte},
     opencl::ClDevice,
     random_sample::opencl::Operator as RandomSampleCl,
     rearrange::opencl::Operator as Rearrange,
-    ByteOf, QueueOf, TopoNode,
+    Blob, ByteOf, QueueOf, TopoNode,
 };
-use std::{
-    marker::PhantomData,
-    ops::{Deref, RangeBounds},
-    ptr::copy_nonoverlapping,
-};
+use std::{marker::PhantomData, ops::Deref, ptr::copy_nonoverlapping};
 
 pub struct Operators<N = ClDevice, R = NonAllReduce<ClDevice, Rearrange>>(PhantomData<(N, R)>);
 
 pub type RandomSample = llama::RandomSample<ClDevice, RandomSampleCl>;
-
-#[repr(transparent)]
-pub struct Weights(LlamaStorage<SvmBlob>);
 
 macro_rules! op {
     ($name:ident) => {
@@ -65,45 +58,38 @@ where
     }
 }
 
-impl Weights {
-    pub fn new(
-        model: &LlamaStorage<&'_ [u8]>,
-        range: impl RangeBounds<usize> + Clone,
-        count: usize,
-        queue: &CommandQueue,
-    ) -> Self {
-        let mut meta = model.meta.clone();
-        meta.distribute(range.clone(), count);
+#[repr(transparent)]
+pub struct Weights(LlamaStorage<SvmBlob>);
 
-        let ctx = queue.ctx();
-        let from_host = |s: &[u8]| {
-            let mut blob = ctx.malloc::<u8>(s.len());
-            let mut mem = queue.map_mut(&mut blob, Invalid);
-            unsafe { mem.write_only_slice().copy_from_slice(s) };
-            queue.unmap(mem);
-            blob
-        };
+impl Weights {
+    pub fn new(model: &LlamaStorage<&[u8]>, dist: Distribution, device: &ClDevice) -> Self {
+        let LlamaStorage {
+            meta,
+            output_norm,
+            output,
+            blocks,
+            ..
+        } = model;
+
+        let blks = blocks
+            .iter()
+            .map(|blk| {
+                blk.clone()
+                    .into_vec()
+                    .into_iter()
+                    .map(|(which, data)| {
+                        (which, meta.distribute_data(which, data, dist, Blob::new))
+                    })
+                    .collect::<LlamaBlkStorage<_>>()
+            })
+            .collect::<Box<_>>();
 
         Self(LlamaStorage {
-            meta,
-            token_embd: from_host(model.token_embd),
-            output_norm: from_host(model.output_norm),
-            output: from_host(model.output),
-            blocks: model
-                .blocks
-                .iter()
-                .map(|blk| {
-                    blk.distribute(&model.meta, range.clone(), count, |size| {
-                        queue.map_blob(queue.ctx().malloc::<u8>(size))
-                    })
-                })
-                .map(|blk| {
-                    blk.map(|c| match c {
-                        Contiguous::Borrowed(s) => from_host(s),
-                        Contiguous::Owned(m) => queue.unmap_blob(m),
-                    })
-                })
-                .collect(),
+            meta: meta.clone(),
+            token_embd: todo!(),
+            output_norm: todo!(),
+            output: todo!(),
+            blocks: todo!(),
         })
     }
 }
@@ -118,35 +104,56 @@ impl WeightLoader for Weights {
     #[inline]
     fn load_blk(
         &self,
-        which: BlkWeight,
+        which: LlamaBlkWeight,
         iblk: usize,
         _queue: &QueueOf<Self::Hardware>,
     ) -> Self::Weight<'_> {
-        let blk = &self.0.blocks[iblk];
-        match which {
-            BlkWeight::AttnNorm => &blk.attn_norm,
-            BlkWeight::AttnQKV => &blk.attn_qkv,
-            BlkWeight::AttnQKVBias => &blk.attn_qkv_bias,
-            BlkWeight::AttnO => &blk.attn_o,
-            BlkWeight::FfnNorm => &blk.ffn_norm,
-            BlkWeight::FfnGateInp => &blk.ffn_gate_inp,
-            BlkWeight::FfnGateUp => &blk.ffn_gate_up,
-            BlkWeight::FfnDown => &blk.ffn_down,
-        }
+        let LlamaBlkStorage {
+            attn_norm,
+            attn_qkv,
+            attn_qkv_bias,
+            attn_o,
+            ffn_norm,
+            ffn_gate_inp,
+            ffn_gate_up,
+            ffn_down,
+        } = &self.0.blocks[iblk];
+
+        use LlamaBlkWeight as W;
+        #[rustfmt::skip]
+        let ans = match which {
+            W::AttnNorm    => attn_norm    ,
+            W::AttnQKV     => attn_qkv     ,
+            W::AttnQKVBias => attn_qkv_bias,
+            W::AttnO       => attn_o       ,
+            W::FfnNorm     => ffn_norm     ,
+            W::FfnGateInp  => ffn_gate_inp ,
+            W::FfnGateUp   => ffn_gate_up  ,
+            W::FfnDown     => ffn_down     ,
+        };
+        ans
     }
 
     fn load_moe<'a>(
         &'a self,
-        which: BlkWeight,
+        which: LlamaBlkWeight,
         iblk: usize,
-        _iexp: usize,
+        iexp: usize,
         _queue: &'a QueueOf<Self::Hardware>,
     ) -> Self::Weight<'a> {
-        let _blk = &self.0.blocks[iblk];
-        match which {
-            BlkWeight::FfnGateUp | BlkWeight::FfnDown => todo!(),
+        let LlamaBlkStorage {
+            ffn_gate_up,
+            ffn_down,
+            ..
+        } = &self.0.blocks[iblk];
+
+        let w = match which {
+            LlamaBlkWeight::FfnGateUp => &ffn_gate_up,
+            LlamaBlkWeight::FfnDown => &ffn_down,
             _ => unreachable!(),
-        }
+        };
+        let one = w.len() / self.0.meta.nexp;
+        &w[iexp * one..][..one]
     }
 
     #[inline]

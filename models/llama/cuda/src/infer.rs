@@ -1,4 +1,5 @@
 ﻿use crate::{Operators, RandomSample, Weights};
+use common::Distribution;
 use gguf::GGufModel;
 use llama::{
     ext::ggml_quants::f16, LlamaArgs, LlamaMeta, LlamaRequest, LlamaStorage, LlamaWorker, Tensor,
@@ -9,7 +10,7 @@ use operators::{
     Alloc, QueueAlloc,
 };
 use std::{slice::from_raw_parts_mut, time::Instant, usize};
-use test_utils::{load_roll_cache_size, Inference, TokenizerAndPrompt};
+use test_utils::{Inference, TokenizerAndPrompt};
 
 type Worker<'w> = LlamaWorker<Operators, Weights<'w>>;
 
@@ -46,9 +47,6 @@ fn test_infer() {
     let device = devices.map_or(0, |devices| devices.parse().unwrap());
     println!("using gpu{device}");
 
-    let roll_cache_size = load_roll_cache_size();
-    println!("roll_cache_size: {roll_cache_size}");
-
     let gpu = match cuda::init() {
         Ok(()) => Device::new(device),
         Err(NoDevice) => return,
@@ -70,7 +68,7 @@ fn test_infer() {
 
         let time = Instant::now();
         let token_embd = stream.ctx().from_host(model.token_embd);
-        let weights = Weights::new(&model, .., 1, roll_cache_size, ctx);
+        let weights = Weights::new(&model, Distribution::MONO, ctx);
         println!("load weights: {:?}", time.elapsed());
 
         let (free, _) = ctx.mem_info();

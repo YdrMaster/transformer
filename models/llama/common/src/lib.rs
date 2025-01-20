@@ -2,11 +2,11 @@ mod args;
 mod compute;
 mod storage;
 
+use common::Distribution;
 use gguf::ggml_quants::digit_layout::DigitLayout;
-use std::ops::{Range, RangeBounds};
 
 pub use args::{Args as LlamaArgs, Request as LlamaRequest};
-pub use compute::{BlkWeight, LlamaWorker, Operators, WeightLoader};
+pub use compute::{LlamaWorker, Operators, WeightLoader};
 pub use storage::{BlkStorage as LlamaBlkStorage, Storage as LlamaStorage};
 pub use tensor::{RandomSample, Tensor};
 pub mod ext {
@@ -45,21 +45,54 @@ pub enum TensorUsage {
     Computation,
 }
 
-impl LlamaMeta {
-    pub fn distribute(&mut self, range: impl RangeBounds<usize>, count: usize) {
-        let len = normalize(range, count).len();
-        assert!(0 < len && len <= count);
-        assert_eq!(self.nkvh % count, 0);
-        assert_eq!(self.di % count, 0);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum LlamaBlkWeight {
+    AttnNorm,
+    AttnQKV,
+    AttnQKVBias,
+    AttnO,
+    FfnNorm,
+    FfnGateInp,
+    FfnGateUp,
+    FfnDown,
+}
 
-        self.nh = self.nh / count * len;
-        self.nkvh = self.nkvh / count * len;
-        self.di = self.di / count * len;
+impl LlamaMeta {
+    pub fn distribute(&self, dist: Distribution) -> Self {
+        let [_, len, total] = dist.info();
+        assert_eq!(self.nkvh % total, 0);
+        assert_eq!(self.di % total, 0);
+
+        Self {
+            nh: self.nh / total * len,
+            nkvh: self.nkvh / total * len,
+            di: self.di / total * len,
+            ..self.clone()
+        }
     }
 
     #[inline]
     pub const fn is_moe(&self) -> bool {
         self.nexp > 0
+    }
+
+    pub fn blk(&self) -> LlamaBlkStorage<usize> {
+        use TensorUsage::Storage as TensorMem;
+        let norm = self.norm().take();
+        LlamaBlkStorage {
+            attn_norm: norm,
+            attn_qkv: self.attn_qkv(TensorMem).take(),
+            attn_qkv_bias: if self.attn_qkv_bias {
+                self.attn_qkv_bias(TensorMem).take()
+            } else {
+                0
+            },
+            attn_o: self.attn_o(TensorMem).take(),
+            ffn_norm: norm,
+            ffn_gate_inp: self.ffn_gate_inp(TensorMem).take(),
+            ffn_gate_up: self.ffn_gate_up(TensorMem).take(),
+            ffn_down: self.ffn_down(TensorMem).take(),
+        }
     }
 
     pub fn kv_cache(&self, buf: usize) -> Tensor<usize> {
@@ -161,20 +194,4 @@ impl LlamaMeta {
             }
         }
     }
-}
-
-fn normalize(range: impl RangeBounds<usize>, count: usize) -> Range<usize> {
-    use std::ops::Bound::{Excluded, Included, Unbounded};
-    let start = match range.start_bound() {
-        Included(&i) => i,
-        Excluded(&i) => i + 1,
-        Unbounded => 0,
-    };
-    let end = match range.end_bound() {
-        Included(&i) => i + 1,
-        Excluded(&i) => i,
-        Unbounded => count,
-    };
-    assert!(start < end && end <= count);
-    start..end
 }
