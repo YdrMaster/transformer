@@ -48,7 +48,7 @@ fn test_infer() {
         ..
     } = &model.meta;
     let weights = Weights::new(&model);
-    let mut worker = Worker::new(&Cpu, model.meta.clone(), weights);
+    let mut worker = Worker::new(0, &Cpu, model.meta.clone(), weights);
     let mut cache = model.meta.kv_cache(nctx).map(Blob::new);
     let indices = RandomSample::build_indices(nvoc, &ThisThread);
     let sample = RandomSample::new(&Cpu);
