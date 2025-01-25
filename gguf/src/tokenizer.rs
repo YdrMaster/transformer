@@ -61,7 +61,6 @@ impl Tokenizer {
     }
 
     fn bpe_from_gguf(gguf: &GGufModel) -> Self {
-        let _pre = gguf.get_str("tokenizer.ggml.pre").unwrap();
         let tokens = gguf.tokenizer_ggml_tokens().unwrap();
         let scores = gguf.tokenizer_ggml_scores().unwrap();
         let token_type = gguf.tokenizer_ggml_token_type().unwrap();
