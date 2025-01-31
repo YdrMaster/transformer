@@ -250,17 +250,40 @@ where
 
                         split!(cache => kc, vc; [1, 1] @ 1);
                         let mut o = unsafe { q.map_slice_static_mut() };
+
+                        let mut kc = kc.index(1, 0).slice(1, 0, 1, 8);
+                        let mut vc = vc.index(1, 0).slice(1, 0, 1, 8);
+
+                        if iblk == 0 && nt == 1 {
+                            println!("--------------------------------------");
+                            println!("q");
+                            Ops::debug(&q, queue);
+                            println!("k");
+                            Ops::debug(&k, queue);
+                            println!("v");
+                            Ops::debug(&v, queue);
+                            println!("kc");
+                            Ops::debug(&kc, queue);
+                            println!("vc");
+                            Ops::debug(&vc, queue);
+                        }
+
                         self.attn_kv_cached(
                             &mut q,
                             &k,
                             &v,
                             &mut o,
-                            &mut kc.index(1, 0),
-                            &mut vc.index(1, 0),
+                            &mut kc,
+                            &mut vc,
                             req.pos,
                             workspace,
                             queue_alloc,
-                        )?
+                        )?;
+
+                        if iblk == 0 && nt == 1 {
+                            println!("o");
+                            Ops::debug(&o, queue)
+                        }
                     }
                 }
 
