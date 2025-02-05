@@ -54,13 +54,6 @@ where
         });
         println!("{tensor}")
     }
-    fn memcpy_d2h<T: Copy>(
-        dst: &mut [T],
-        src: &[ByteOf<Self::Hardware>],
-        _queue: &QueueOf<Self::Hardware>,
-    ) {
-        memcpy_d2h(dst, src)
-    }
 }
 
 pub struct Weights<'ctx> {
@@ -84,13 +77,12 @@ impl<'ctx> Weights<'ctx> {
             output_norm_w,
         } = model;
 
-        let mut calculator = WeightMemCalculator::new(ctx.dev().alignment());
+        let mut calculator = WeightMemCalculator::new(512);
         let meta_dist = meta.distribute(dist);
         let blk_size = meta_dist.blk();
         let off_blks = (0..meta_dist.nblk)
             .map(|_| {
                 blk_size
-                    .clone()
                     .into_vec()
                     .into_iter()
                     .map(|(which, size)| (which, calculator.push(size)))
@@ -115,7 +107,7 @@ impl<'ctx> Weights<'ctx> {
         }
 
         for (blk, off) in zip(blocks, off_blks.clone()) {
-            let blk = blk.clone().into_vec();
+            let blk = blk.into_vec();
             let off = off.into_vec();
             for ((which, data), (which_, off)) in zip(blk, off) {
                 assert_eq!(which, which_);

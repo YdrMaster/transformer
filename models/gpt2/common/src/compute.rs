@@ -29,11 +29,6 @@ pub trait Operators {
     fn debug<T>(tensor: &Tensor<T>)
     where
         T: Deref<Target = [ByteOf<Self::Hardware>]>;
-    fn memcpy_d2h<T: Copy>(
-        dst: &mut [T],
-        src: &[ByteOf<Self::Hardware>],
-        queue: &QueueOf<Self::Hardware>,
-    );
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

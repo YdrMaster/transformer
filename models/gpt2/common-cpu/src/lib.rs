@@ -11,7 +11,7 @@ use operators::{
     ByteOf, QueueOf, TopoNode,
 };
 use std::ops::Deref;
-use std::{marker::PhantomData, ptr::copy_nonoverlapping};
+use std::marker::PhantomData;
 
 pub struct Operators<N = Cpu, R = NonAllReduce<Cpu, Rearrange>>(PhantomData<(N, R)>);
 
@@ -52,16 +52,6 @@ where
         T: Deref<Target = [ByteOf<Self::Hardware>]>,
     {
         println!("{tensor}");
-    }
-
-    fn memcpy_d2h<T: Copy>(
-        dst: &mut [T],
-        src: &[ByteOf<Self::Hardware>],
-        _queue: &QueueOf<Self::Hardware>,
-    ) {
-        let count = size_of_val(dst);
-        assert_eq!(size_of_val(src), count);
-        unsafe { copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr().cast::<u8>(), count) }
     }
 }
 

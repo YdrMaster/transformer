@@ -2,11 +2,12 @@ pub mod args;
 pub mod compute;
 pub mod storage;
 
+use common::Distribution;
+use gguf::ggml_quants::digit_layout::DigitLayout;
+
 pub use args::{Args as GPT2Args, Request as GPT2Request};
 pub use common::Contiguous;
-use common::Distribution;
 pub use compute::{BlkWeight, Gpt2Worker, Operators, WeightLoader};
-use gguf::ggml_quants::digit_layout::DigitLayout;
 pub use storage::{BlkStorage as GPT2BlkStorage, Storage as GPT2Storage};
 pub use tensor::{RandomSample, Tensor};
 pub mod ext {

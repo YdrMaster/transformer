@@ -1,8 +1,7 @@
-use std::ops::DerefMut;
-
 use crate::{GPT2BlkWeight, Gpt2Meta};
 use common::{borrow, own, Contiguous, Distribution};
 use gguf::{meta, tensor, GGufMetaMapExt, GGufModel};
+use std::ops::DerefMut;
 use tensor::{rearrange, split, Tensor};
 
 #[derive(Clone)]
@@ -132,7 +131,7 @@ impl<T> BlkStorage<T> {
         }
     }
 
-        #[rustfmt::skip]
+    #[rustfmt::skip]
     pub fn into_vec(self) -> Vec<(GPT2BlkWeight, T)> {
             use GPT2BlkWeight as W;
             vec![
@@ -153,7 +152,6 @@ impl<T> BlkStorage<T> {
 }
 
 impl<T> FromIterator<(GPT2BlkWeight, T)> for BlkStorage<T> {
-    #[rustfmt::skip]
     fn from_iter<U>(iter: U) -> Self
     where
         U: IntoIterator<Item = (GPT2BlkWeight, T)>,
@@ -175,34 +173,34 @@ impl<T> FromIterator<(GPT2BlkWeight, T)> for BlkStorage<T> {
         for (which, data) in iter {
             use GPT2BlkWeight as W;
             match which {
-                W::AttnQkvB =>  collector.attn_qkv_b=Some(data),
-                W::AttnQkvW => collector.attn_qkv_w =Some(data),
-                W::AttnOB => collector.attn_o_b =Some(data),
-                W::AttnOW => collector.attn_o_w=Some(data),
-                W::AttnNormB => collector.attn_norm_b=Some(data),
-                W::AttnNormW => collector.attn_norm_w=Some(data),
-                W::FfnUpB => collector.ffn_up_b=Some(data),
-                W::FfnUpW => collector.ffn_up_w=Some(data),
-                W::FfnDownB => collector.ffn_down_b=Some(data),
-                W::FfnDownW => collector.ffn_down_w=Some(data),
-                W::FfnNormB => collector.ffn_norm_b=Some(data),
-                W::FfnNormW => collector.ffn_norm_w=Some(data),
+                W::AttnQkvB => collector.attn_qkv_b = Some(data),
+                W::AttnQkvW => collector.attn_qkv_w = Some(data),
+                W::AttnOB => collector.attn_o_b = Some(data),
+                W::AttnOW => collector.attn_o_w = Some(data),
+                W::AttnNormB => collector.attn_norm_b = Some(data),
+                W::AttnNormW => collector.attn_norm_w = Some(data),
+                W::FfnUpB => collector.ffn_up_b = Some(data),
+                W::FfnUpW => collector.ffn_up_w = Some(data),
+                W::FfnDownB => collector.ffn_down_b = Some(data),
+                W::FfnDownW => collector.ffn_down_w = Some(data),
+                W::FfnNormB => collector.ffn_norm_b = Some(data),
+                W::FfnNormW => collector.ffn_norm_w = Some(data),
             };
         }
 
-        BlkStorage  {
-           attn_qkv_b:collector.attn_qkv_b.unwrap(),
-           attn_qkv_w:collector.attn_qkv_w.unwrap(),
-           attn_o_b:collector.attn_o_b.unwrap(),
-           attn_o_w:collector.attn_o_w.unwrap(),
-           attn_norm_b:collector.attn_norm_b.unwrap(),
-           attn_norm_w:collector.attn_norm_w.unwrap(),
-           ffn_up_b:collector.ffn_up_b.unwrap(),
-           ffn_up_w:collector.ffn_up_w.unwrap(),
-           ffn_down_b:collector.ffn_down_b.unwrap(),
-           ffn_down_w:collector.ffn_down_w.unwrap(),
-           ffn_norm_b:collector.ffn_norm_b.unwrap(),
-           ffn_norm_w:collector.ffn_norm_w.unwrap(),
+        BlkStorage {
+            attn_qkv_b: collector.attn_qkv_b.unwrap(),
+            attn_qkv_w: collector.attn_qkv_w.unwrap(),
+            attn_o_b: collector.attn_o_b.unwrap(),
+            attn_o_w: collector.attn_o_w.unwrap(),
+            attn_norm_b: collector.attn_norm_b.unwrap(),
+            attn_norm_w: collector.attn_norm_w.unwrap(),
+            ffn_up_b: collector.ffn_up_b.unwrap(),
+            ffn_up_w: collector.ffn_up_w.unwrap(),
+            ffn_down_b: collector.ffn_down_b.unwrap(),
+            ffn_down_w: collector.ffn_down_w.unwrap(),
+            ffn_norm_b: collector.ffn_norm_b.unwrap(),
+            ffn_norm_w: collector.ffn_norm_w.unwrap(),
         }
     }
 }
