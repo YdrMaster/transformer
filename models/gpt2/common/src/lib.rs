@@ -59,7 +59,6 @@ pub enum TensorUsage {
 }
 
 impl Gpt2Meta {
-    /// TODO 分布式未测试
     pub fn distribute(&self, dist: Distribution) -> Self {
         let [_, len, total] = dist.info();
         assert_eq!(self.nkvh % total, 0);

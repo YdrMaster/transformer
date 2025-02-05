@@ -1,9 +1,10 @@
 use gpt2::{
-    storage::{BlkStorage, Storage},
-    BlkWeight, Tensor, WeightLoader,
+    storage::{BlkStorage, Storage}, BlkWeight, GPT2BlkWeight, Tensor, WeightLoader,
+    ext::ggml_quants::{self, digit_layout::DigitLayout, f16, DataBlock, QuantExt},
 };
 pub use gpt2::{GPT2BlkStorage, GPT2Storage};
 use operators::{
+    Blob,
     all_reduce::{AllReduce, NonAllReduce},
     common_cpu::Cpu,
     random_sample::common_cpu::Operator as RandomSampleCpu,
@@ -19,11 +20,24 @@ pub type RandomSample = gpt2::RandomSample<Cpu, RandomSampleCpu>;
 
 pub struct Weights<'w> {
     blks: Box<[BlkStorage<&'w [u8]>]>,
-    output_norm_w: &'w [u8],
-    output_norm_b: &'w [u8],
+    output_norm: &'w [u8],
     output: &'w [u8],
-    pos_embd: &'w [u8],
+    pos_embd: DigitLayou,
+    dt_embd: DigitLayout,
+    dt_mat: DigitLayout,
+    nexp: usize,
+    size_qkv: usize,
+    size_o: usize,
+    size_gate_up: usize,
+    size_down: usize,
 }
+
+pub struct WeightCache {
+    cache: Blob,
+    cached_weight: GPT2BlkWeight,
+    cached_weight_iblk: usize,
+}
+
 
 macro_rules! op {
     ($name:ident) => {
@@ -56,26 +70,54 @@ where
 }
 
 impl<'w> Weights<'w> {
-    pub fn new(model: &'w Storage<&'w [u8]>) -> Self {
-        let Storage {
-            output_norm_w,
-            output_norm_b,
+    pub fn new(model: &'w GPT2Storage<&'w [u8]>, dist: Distribution) -> Self {
+        let GPT2Storage {
+            meta,
             output,
             blocks,
+            token_embd,
             pos_embd,
-            ..
+            output_norm_b,
+            output_norm_w,
         } = model;
 
+        let blks = blocks
+            .iter()
+            .map(|blk| {
+                blk.clone()
+                    .into_vec()
+                    .into_iter()
+                    .map(|(which, data)| {
+                        (which, meta.distribute_data(which, data, dist, Blob::new))
+                    })
+                    .collect::<GPT2BlkStorage<_>>()
+            })
+            .collect::<Box<_>>();
+
+        let meta = meta.distribute(dist);
+        let size_qkv_w = meta.attn_qkv_w(Computation).take();
+        let size_qkv_b = meta.attn_qkv_b(Computation).take();
+        let size_o_w = meta.attn_o_w(Computation).take();
+        let size_o_b = meta.attn_o_b(Computation).take();
+        let size_up_w = meta.ffn_down_w(Computation).take();
+        let size_up_b = meta.ffn_down_b(Computation).take();
+        let size_down_w = meta.ffn_down_w(Computation).take();
+        let size_down_b = meta.ffn_down_b(Computation).take();
         Self {
-            pos_embd,
-            blks: blocks.clone(),
-            output_norm_w,
-            output_norm_b,
+            blks,
+            output_norm,
             output,
+            dt_embd: meta.dt_embd,
+            dt_mat: meta.dt_linear,
+            nexp: meta.nexp,
+            size_qkv,
+            size_o,
+            size_gate_up,
+            size_down,
+            pos_embd,
         }
     }
 }
-
 impl WeightLoader for Weights<'_> {
     type Hardware = Cpu;
     type Memory<'s>
