@@ -1,18 +1,19 @@
+
 use gpt2::{
-    storage::{BlkStorage, Storage}, BlkWeight, GPT2BlkWeight, Tensor, WeightLoader,
     ext::ggml_quants::{self, digit_layout::DigitLayout, f16, DataBlock, QuantExt},
+    storage::{BlkStorage, Storage},
+    BlkWeight, GPT2BlkWeight, Tensor, WeightLoader,
 };
-pub use gpt2::{GPT2BlkStorage, GPT2Storage};
+pub use gpt2::{GPT2BlkStorage, GPT2Storage,TensorUsage::Computation};
 use operators::{
-    Blob,
     all_reduce::{AllReduce, NonAllReduce},
     common_cpu::Cpu,
     random_sample::common_cpu::Operator as RandomSampleCpu,
     rearrange::common_cpu::Operator as Rearrange,
-    ByteOf, QueueOf, TopoNode,
+    Blob, ByteOf, QueueOf, TopoNode,
 };
-use std::ops::Deref;
 use std::marker::PhantomData;
+use std::ops::Deref;
 
 pub struct Operators<N = Cpu, R = NonAllReduce<Cpu, Rearrange>>(PhantomData<(N, R)>);
 
@@ -20,9 +21,10 @@ pub type RandomSample = gpt2::RandomSample<Cpu, RandomSampleCpu>;
 
 pub struct Weights<'w> {
     blks: Box<[BlkStorage<&'w [u8]>]>,
-    output_norm: &'w [u8],
+    output_norm_w: &'w [u8],
+    output_norm_b: &'w [u8],
     output: &'w [u8],
-    pos_embd: DigitLayou,
+    pos_embd: DigitLayout,
     dt_embd: DigitLayout,
     dt_mat: DigitLayout,
     nexp: usize,
@@ -37,7 +39,6 @@ pub struct WeightCache {
     cached_weight: GPT2BlkWeight,
     cached_weight_iblk: usize,
 }
-
 
 macro_rules! op {
     ($name:ident) => {
@@ -105,7 +106,8 @@ impl<'w> Weights<'w> {
         let size_down_b = meta.ffn_down_b(Computation).take();
         Self {
             blks,
-            output_norm,
+            output_norm_b,
+            output_norm_w,
             output,
             dt_embd: meta.dt_embd,
             dt_mat: meta.dt_linear,

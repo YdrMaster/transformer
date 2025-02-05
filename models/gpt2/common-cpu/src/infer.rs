@@ -11,7 +11,6 @@ use test_utils::{Inference, TokenizerAndPrompt};
 
 type Worker<'w> = Gpt2Worker<Operators, Weights<'w>>;
 
-
 #[test]
 fn test_infer() {
     let Some(Inference {
