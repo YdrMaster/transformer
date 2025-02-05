@@ -16,6 +16,9 @@ members = [
 
     "models/gpt2/common",
     "models/gpt2/common-cpu",
+
+    "models/minicpm3/common",
+    "models/minicpm3/common-cpu",
 ]
 resolver = "2"
 
