@@ -94,13 +94,13 @@ InfiniLM 基于 bindgen 绑定 Nvidia 驱动，同时依赖 xmake 完成部分 C
 
 1. 安装 [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit)；
 2. 参考 [bindgen 文档](https://rust-lang.github.io/rust-bindgen/requirements.html)安装 Clang；
-3. 参考 [xmake 文档](https://xmake.io/#/zh-cn/getting_started?id=%e5%ae%89%e8%a3%85)安装 xmake。
+3. 参考 [xmake 文档](https://xmake.io/#/zh-cn/getting_started?id=%e5%ae%89%e8%a3%85)安装 xmake；
 
 #### 1.5.3 OpenCL
 
 OpenCL 广泛用于核芯显卡、移动端 GPU 等低功耗计算加速硬件。
 
-TODO
+参考 [clrt 文档](https://github.com/InfiniTensor/clrt)配置 OpenCL 环境。
 
 ## 2. 获取 InfiniLM 推理引擎源码
 
@@ -125,7 +125,19 @@ InfiniLM 可读取 gguf 格式存储的 LLaMa 和 GPT2 兼容型大语言模型�
 
 > **NOTICE** 目前 InfiniLM 对量化模型的支持仍是实验性的，仅保证 f16 数据类型的模型可推理。
 
-推荐使用 [gguf-utils](https://crates.io/crates/gguf-utils) 检查和操作 gguf 模型文件。
+使用 [gguf-utils](https://crates.io/crates/gguf-utils) 变换模型到适宜推理的形式：
+
+- llama
+
+  ```shell
+  cargo convert `<model.gguf>` -x cast:linear:f16,norm:f32->merge-linear->sort `[--log trace]`
+  ```
+
+- qwen2
+
+  ```shell
+  cargo convert `<model.gguf>` -x cast:linear:f16,norm:f32->permute-qk->merge-linear->sort `[--log trace]`
+  ```
 
 ## 4. 执行推理
 
