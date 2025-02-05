@@ -1,6 +1,6 @@
 use crate::{Operators, RandomSample, Weights};
 use gguf::GGufModel;
-use gpt2::{ext::ggml_quants::f16, Gpt2Meta, Gpt2Worker, Storage, Tensor};
+use gpt2::{ext::ggml_quants::f16, GPT2Storage, Gpt2Meta, Gpt2Worker, Tensor};
 use operators::{
     common_cpu::{Cpu, ThisThread},
     random_sample::{KVPair, SampleArgs},
@@ -15,13 +15,13 @@ type Worker<'w> = Gpt2Worker<Operators, Weights<'w>>;
 fn test_infer() {
     let Some(Inference {
         model,
+        devices,
         prompt,
         as_user,
         temperature,
         top_p,
         top_k,
         max_steps,
-        ..
     }) = Inference::load()
     else {
         return;
@@ -34,73 +34,111 @@ fn test_infer() {
         prompt,
     } = TokenizerAndPrompt::new(&gguf, prompt, as_user);
 
-    let model = Storage::from_gguf(&gguf);
+    let model = GPT2Storage::from_gguf(&gguf);
     println!("{:?}", model.meta);
 
     let sample_args = SampleArgs::new(temperature, top_p, top_k).expect("invalid sample args");
     println!("{sample_args:?}");
 
-    let &Gpt2Meta {
-        dt_embd,
-        nctx,
-        nvoc,
-        d,
-        ..
-    } = &model.meta;
-    let weights = Weights::new(&model);
-    let mut worker = Worker::new(&Cpu, model.meta.clone(), weights);
-    let mut cache = model.meta.kv_cache(nctx).map(Blob::new);
-    let indices = RandomSample::build_indices(nvoc, &ThisThread);
-    let sample = RandomSample::new(&Cpu);
+    let lens = devices
+        .map(|devices| {
+            Regex::new(r"\d+")
+                .unwrap()
+                .find_iter(&devices)
+                .map(|c| c.as_str().parse().unwrap())
+                .collect()
+        })
+        .unwrap_or_else(|| vec![1]);
+    let dist = lens.iter().sum();
+    println!("distribution: {lens:?}");
 
-    test_utils::test_infer(eos, tokenizer, &prompt, max_steps, |input, pos| {
-        // 词汇编码缓存
-        let mut embd = Tensor::new(dt_embd, &[input.len(), d]).map(Blob::new);
-        // 词汇位置缓存
-        let mut logits = model.meta.logits(1).map(Blob::new);
-        let l = embd.get().len() / input.len();
-        for (i, &tok) in input.iter().enumerate() {
-            embd.get_mut()[i * l..][..l]
-                .copy_from_slice(&model.token_embd[tok as usize * l..][..l]);
-        }
-        worker
-            .launch(
-                gpt2::args::Args {
-                    embd: embd.map_slice_mut(),
-                    logits: logits.map_slice_mut(),
-                    idx: postion(input.len(), pos).map_slice(),
-                    requests: vec![gpt2::args::Request {
-                        cache: cache.map_slice_mut(),
-                        seq_len: input.len(),
-                        out_len: 1,
-                        pos,
-                    }],
-                    max_seq_len: input.len(),
-                    max_att_len: pos + input.len(),
-                },
-                &mut [],
-                &ThisThread,
-            )
-            .unwrap();
+    let (seeds, senders) = WorkerSeed::new(InprocNode::new(lens.len()));
+    let barrier = Arc::new(Barrier::new(dist + 1));
+    thread::scope(|s| {
+        let _workers = zip(lens, seeds)
+            .enumerate()
+            .scan(0, |start, (id, (len, seed))| {
+                let dist = Distribution::new(*start, len, dist);
+                *start += len;
 
-        let mut pair = KVPair::new(0, f16::ZERO);
-        let mut pairs = Tensor::kv_pair_vec(1, |_| unsafe {
-            from_raw_parts_mut(&mut pair as *mut _ as _, size_of_val(&pair))
-        });
+                let meta = model.meta.distribute(dist);
+                let model = &model;
+                let barrier = barrier.clone();
+                Some(s.spawn(move || {
+                    let WorkerSeed { node, tasks } = seed;
+                    let weights = Weights::new(model, dist);
+                    let mut worker = Worker::new(id, &node, meta.clone(), weights);
+                    let mut cache = meta.kv_cache(meta.nctx).map(Blob::new);
+                    let sin_cos = <Operators as llama::Operators>::build_sin_cos(
+                        meta.dt_embd,
+                        meta.nctx,
+                        meta.dh,
+                        &ThisThread,
+                    );
 
-        sample
-            .launch(
-                &mut pairs,
-                &logits,
-                &indices,
-                sample_args,
-                &mut [],
-                &ThisThread,
-            )
-            .unwrap();
+                    let sample = RandomSample::new(&node);
+                    let indices = RandomSample::build_indices(model.meta.nvoc, &ThisThread);
+                    let mut pair = KVPair::new(0, f16::ZERO);
+                    let mut pairs = Tensor::kv_pair_vec(1, |_| unsafe {
+                        from_raw_parts_mut(&mut pair as *mut _ as *mut u8, size_of_val(&pair))
+                    });
 
-        pair.idx() as _
-    });
+                    barrier.wait();
+                    for task in tasks {
+                        let Task {
+                            nt,
+                            pos,
+                            embd,
+                            next,
+                        } = task;
+                        let mut embd = meta.embd(nt).map(|size| {
+                            let mut blob = Blob::new(size);
+                            unsafe { copy_nonoverlapping(embd, blob.as_mut_ptr(), size) };
+                            blob
+                        });
+                        let mut logits = meta.logits(if id == 0 { 1 } else { 0 }).map(Blob::new);
+                        worker
+                            .launch(
+                                llama::LlamaArgs {
+                                    embd: embd.map_slice_mut(),
+                                    logits: logits.map_slice_mut(),
+                                    sin_cos: sin_cos.map_slice(),
+                                    requests: vec![LlamaRequest {
+                                        cache: cache.map_slice_mut(),
+                                        seq_len: nt,
+                                        out_len: if id == 0 { 1 } else { 0 },
+                                        pos,
+                                    }],
+                                    num_tokens: nt,
+                                    max_seq_len: nt,
+                                    max_att_len: nt + pos,
+                                },
+                                &mut [],
+                                &ThisThread,
+                            )
+                            .unwrap();
+                        if id == 0 {
+                            sample
+                                .launch(
+                                    &mut pairs,
+                                    &logits,
+                                    &indices,
+                                    sample_args,
+                                    &mut [],
+                                    &ThisThread,
+                                )
+                                .unwrap();
+                            next.send(pair.idx() as _).unwrap()
+                        }
+                    }
+                }))
+            })
+            .collect::<Vec<_>>();
+
+        let senders = senders.into_boxed_slice();
+        barrier.wait();
+        test_infer_paralle(&model, senders, eos, tokenizer, &prompt, max_steps)
+    })
 }
 
 fn postion(l: usize, pos: usize) -> Tensor<Blob> {
