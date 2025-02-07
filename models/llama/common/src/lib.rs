@@ -106,6 +106,10 @@ impl LlamaMeta {
         Tensor::new(dt_embd, &[buf, nblk, 2, nkvh, dh])
     }
 
+    pub fn kv_cache_in_size(&self, max: usize, size: usize) -> Tensor<usize> {
+        self.kv_cache((size / self.kv_cache(1).take()).min(max))
+    }
+
     pub fn embd(&self, nt: usize) -> Tensor<usize> {
         let &Self { dt_embd, d, .. } = self;
         Tensor::new(dt_embd, &[nt, d])

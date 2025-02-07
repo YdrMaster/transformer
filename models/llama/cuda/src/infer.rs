@@ -72,13 +72,20 @@ fn test_infer() {
         println!("load weights: {:?}", time.elapsed());
 
         let (free, _) = ctx.mem_info();
-        let queue_alloc = StreamMemPool::new(stream);
-        queue_alloc.put((free.0 >> 30) << 30);
+        let mut cache = meta
+            // 用剩余空闲空间的一半存储 kv cache
+            .kv_cache_in_size(nctx, free.0 / 2)
+            .map(|len| ctx.malloc::<u8>(len));
+        println!("cache len = {}", cache.shape()[0]);
 
+        let queue_alloc = StreamMemPool::new(stream);
         let alloc = |size| -> MemPoolBlob { queue_alloc.alloc(size) };
 
+        let (free, _) = ctx.mem_info();
+        // 去除 64MiB 以下的零头
+        queue_alloc.put(free.0 & !((64 << 20) - 1));
+
         let mut worker = Worker::new(0, &gpu, meta.clone(), weights);
-        let mut cache = meta.kv_cache(nctx).map(alloc);
         let sin_cos =
             <Operators as llama::Operators>::build_sin_cos(dt_embd, nctx, dh, &queue_alloc);
         let indices = RandomSample::build_indices(nvoc, &queue_alloc);
