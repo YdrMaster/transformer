@@ -1,7 +1,7 @@
 [package]
 name = "gpt2-cuda"
 version = "0.0.0"
-edition = "2021"
+edition.workspace = true
 authors = ["onenewcode <lovestudy@qq.com>", "YdrMaster <ydrml@hotmail.com>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -18,6 +18,6 @@ search-cuda-tools.workspace = true
 search-corex-tools.workspace = true
 
 [dev-dependencies]
-test-utils = { workspace = true, features = ["gpt2"] }
+test-utils.workspace = true
 gguf.workspace = true
 regex.workspace = true

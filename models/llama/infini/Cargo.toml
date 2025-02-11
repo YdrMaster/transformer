@@ -1,7 +1,7 @@
 [package]
 name = "llama-infini"
 version = "0.0.0"
-edition = "2021"
+edition.workspace = true
 authors = ["YdrMaster <ydrml@hotmail.com>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -17,6 +17,6 @@ build-script-cfg.workspace = true
 search-infini-tools.workspace = true
 
 [dev-dependencies]
-test-utils = { workspace = true, features = ["llama"] }
+test-utils.workspace = true
 gguf.workspace = true
 regex.workspace = true

@@ -174,6 +174,16 @@ fn test_infer() {
 
         let senders = senders.into_boxed_slice();
         barrier.wait();
-        test_infer_paralle(&model, senders, eos, tokenizer, &prompt, max_steps)
+        test_infer_paralle(
+            senders,
+            test_utils::AboutToken {
+                tokenizer,
+                token_embd: model.token_embd,
+                nvoc: model.meta.nvoc,
+                eos,
+            },
+            &prompt,
+            max_steps,
+        )
     })
 }

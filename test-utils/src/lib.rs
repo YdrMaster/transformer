@@ -11,41 +11,7 @@ use std::{
     sync::{mpsc, Once},
     time::{Duration, Instant},
 };
-#[cfg(feature = "llama")]
-mod llama {
-    use crate::InferStorage;
-    use llama::LlamaStorage;
-    use tensor::Tensor;
 
-    impl InferStorage for &LlamaStorage<&[u8]> {
-        fn embd(&self, nt: usize) -> Tensor<usize> {
-            self.meta.embd(nt)
-        }
-        fn token_embd(&self) -> &[u8] {
-            self.token_embd
-        }
-    }
-}
-#[cfg(feature = "gpt2")]
-mod gpt2 {
-    use crate::InferStorage;
-    use gpt2::GPT2Storage;
-    use tensor::Tensor;
-
-    impl InferStorage for &GPT2Storage<&[u8]> {
-        fn embd(&self, nt: usize) -> Tensor<usize> {
-            self.meta.embd(nt)
-        }
-        fn token_embd(&self) -> &[u8] {
-            self.token_embd
-        }
-    }
-}
-
-pub trait InferStorage {
-    fn embd(&self, nt: usize) -> Tensor<usize>;
-    fn token_embd(&self) -> &[u8];
-}
 pub struct Inference {
     pub model: Box<[Mmap]>,
     pub devices: Option<String>,
@@ -70,7 +36,6 @@ mod env {
     pub const ROLL_CACHE_SIZE: &str = "ROLL_CACHE_SIZE";
 }
 use env::*;
-use tensor::Tensor;
 
 impl Inference {
     pub fn load() -> Option<Self> {
@@ -232,23 +197,32 @@ pub fn test_infer(
     }
 }
 
+pub struct AboutToken<'a> {
+    pub tokenizer: Tokenizer,
+    pub token_embd: &'a [u8],
+    pub nvoc: usize,
+    pub eos: utok,
+}
+
 pub fn test_infer_paralle(
-    model: impl InferStorage,
     senders: Box<[mpsc::Sender<Task>]>,
-    eos: utok,
-    tokenizer: Tokenizer,
+    about_token: AboutToken,
     prompt: &str,
     max_steps: usize,
 ) {
-    use tensor::Blob;
-
     let (next, next_recv) = mpsc::channel();
+    let AboutToken {
+        tokenizer,
+        token_embd,
+        nvoc,
+        eos,
+    } = about_token;
+    let d = token_embd.len() / nvoc;
+    let mut embd = Vec::new();
     test_infer(eos, tokenizer, prompt, max_steps, |input, pos| {
-        let mut embd = model.embd(input.len()).map(Blob::new).take();
-
-        let d = embd.len() / input.len();
+        embd.resize(d * input.len(), 0);
         for (i, &tok) in input.iter().enumerate() {
-            embd[i * d..][..d].copy_from_slice(&model.token_embd()[tok as usize * d..][..d]);
+            embd[i * d..][..d].copy_from_slice(&token_embd[tok as usize * d..][..d]);
         }
 
         for sender in &senders {

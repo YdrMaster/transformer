@@ -1,17 +1,11 @@
 [package]
 name = "test-utils"
 version = "0.0.0"
-edition = "2021"
+edition.workspace = true
 authors = ["YdrMaster <ydrml@hotmail.com>"]
 
-[features]
-default = ["llama","gpt2"]
-
 [dependencies]
-llama = { path = "../models/llama/common", optional = true }
-gpt2 = { path = "../models/gpt2/common", optional = true }
 common.workspace = true
 gguf.workspace = true
-tensor.workspace = true
 env_logger.workspace = true
 cli-table = "0.4.9"

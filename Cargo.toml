@@ -20,12 +20,15 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+edition = "2021"
+
 [workspace.dependencies]
 common.path = "common"
 gguf.path = "gguf"
 tensor.path = "tensor"
 causal-lm.path = "causal-lm"
-test-utils = { path = "test-utils", default-features = false }
+test-utils.path = "test-utils"
 
 ggus = "0.4"
 ndarray-layout = "0.0"
