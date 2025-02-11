@@ -60,6 +60,8 @@ pub trait WeightLoader {
 }
 
 pub struct Gpt2Worker<Ops: Operators, W> {
+    #[allow(dead_code)]
+    id: usize,
     meta: Gpt2Meta,
     weights: WeightDecorator<W>,
     add_rows: Ops::AddRows,
@@ -70,14 +72,14 @@ pub struct Gpt2Worker<Ops: Operators, W> {
     add: Ops::Add,
     rearrange: Ops::Rearrange,
     all_reduce: Ops::AllReduce,
-    pub debug: bool,
 }
 
 impl<Ops: Operators, W> Gpt2Worker<Ops, W> {
-    pub fn new(node: &Ops::TopoNode, meta: Gpt2Meta, weights: W) -> Self {
+    pub fn new(id: usize, node: &Ops::TopoNode, meta: Gpt2Meta, weights: W) -> Self {
         let processor = node.processor();
         Self {
-            weights: meta.decorator(weights), // meta.decorator
+            id,
+            weights: meta.decorator(weights),
             meta,
             add_rows: Ops::AddRows::new(processor),
             layer_norm: Ops::LayerNorm::new(processor),
@@ -87,7 +89,6 @@ impl<Ops: Operators, W> Gpt2Worker<Ops, W> {
             add: Ops::Add::new(processor),
             rearrange: Ops::Rearrange::new(processor),
             all_reduce: Ops::AllReduce::new(node),
-            debug: true,
         }
     }
 

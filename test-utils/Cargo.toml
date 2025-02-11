@@ -5,10 +5,12 @@ edition = "2021"
 authors = ["YdrMaster <ydrml@hotmail.com>"]
 
 [features]
-default = ["llama"]
+default = ["llama","gpt2"]
 
 [dependencies]
 llama = { path = "../models/llama/common", optional = true }
+gpt2 = { path = "../models/gpt2/common", optional = true }
+common.workspace = true
 gguf.workspace = true
 tensor.workspace = true
 env_logger.workspace = true

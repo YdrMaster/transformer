@@ -1,5 +1,5 @@
 [package]
-name = "gpt2-cpu"
+name = "gpt2-cuda"
 version = "0.0.0"
 edition = "2021"
 authors = ["onenewcode <lovestudy@qq.com>", "YdrMaster <ydrml@hotmail.com>"]
@@ -9,7 +9,13 @@ authors = ["onenewcode <lovestudy@qq.com>", "YdrMaster <ydrml@hotmail.com>"]
 [dependencies]
 gpt2.path = "../common"
 common.workspace = true
-operators = { workspace = true, features = ["common-cpu"] }
+log.workspace = true
+operators = { workspace = true, features = ["nvidia-gpu", "iluvatar-gpu"] }
+
+[build-dependencies]
+build-script-cfg.workspace = true
+search-cuda-tools.workspace = true
+search-corex-tools.workspace = true
 
 [dev-dependencies]
 test-utils = { workspace = true, features = ["gpt2"] }

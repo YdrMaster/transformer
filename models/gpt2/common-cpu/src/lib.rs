@@ -1,23 +1,22 @@
-use gpt2::{
-    storage::{BlkStorage, Storage},
-    BlkWeight, Tensor, WeightLoader,
-};
+use common::{Contiguous, Distribution};
+use gpt2::{storage::BlkStorage, BlkWeight, Tensor, WeightLoader};
 use operators::{
     all_reduce::{AllReduce, NonAllReduce},
     common_cpu::Cpu,
     random_sample::common_cpu::Operator as RandomSampleCpu,
     rearrange::common_cpu::Operator as Rearrange,
-    ByteOf, QueueOf, TopoNode,
+    Blob, ByteOf, QueueOf, TopoNode,
 };
-use std::marker::PhantomData;
-use std::ops::Deref;
+use std::{marker::PhantomData, ops::Deref};
+
+pub use gpt2::{GPT2BlkStorage, GPT2Storage, TensorUsage::Computation};
 
 pub struct Operators<N = Cpu, R = NonAllReduce<Cpu, Rearrange>>(PhantomData<(N, R)>);
 
 pub type RandomSample = gpt2::RandomSample<Cpu, RandomSampleCpu>;
 
 pub struct Weights<'w> {
-    blks: Box<[BlkStorage<&'w [u8]>]>,
+    blks: Box<[GPT2BlkStorage<Contiguous<'w, Blob>>]>,
     output_norm_w: &'w [u8],
     output_norm_b: &'w [u8],
     output: &'w [u8],
@@ -55,26 +54,37 @@ where
 }
 
 impl<'w> Weights<'w> {
-    pub fn new(model: &'w Storage<&'w [u8]>) -> Self {
-        let Storage {
-            output_norm_w,
-            output_norm_b,
+    pub fn new(model: &'w GPT2Storage<&'w [u8]>, dist: Distribution) -> Self {
+        let GPT2Storage {
+            meta,
             output,
             blocks,
             pos_embd,
+            output_norm_b,
+            output_norm_w,
             ..
         } = model;
 
+        let blks = blocks
+            .iter()
+            .map(|blk| {
+                blk.into_vec()
+                    .into_iter()
+                    .map(|(which, data)| {
+                        (which, meta.distribute_data(which, data, dist, Blob::new))
+                    })
+                    .collect::<GPT2BlkStorage<_>>()
+            })
+            .collect::<Box<_>>();
         Self {
-            pos_embd,
-            blks: blocks.clone(),
-            output_norm_w,
+            blks,
             output_norm_b,
+            output_norm_w,
             output,
+            pos_embd,
         }
     }
 }
-
 impl WeightLoader for Weights<'_> {
     type Hardware = Cpu;
     type Memory<'s>
@@ -103,7 +113,6 @@ impl WeightLoader for Weights<'_> {
             ffn_down_w,
             ffn_down_b,
         } = &self.blks[iblk];
-
         match which {
             BlkWeight::AttnNorm => [attn_norm_w, attn_norm_b],
             BlkWeight::AttnQKV => [attn_qkv_w, attn_qkv_b],
@@ -113,6 +122,7 @@ impl WeightLoader for Weights<'_> {
             BlkWeight::FfnDown => [ffn_down_w, ffn_down_b],
         }
     }
+
     #[inline]
     fn output_norm(&self, _queue: &QueueOf<Self::Hardware>) -> [Self::Memory<'_>; 2] {
         [self.output_norm_w, self.output_norm_b]
