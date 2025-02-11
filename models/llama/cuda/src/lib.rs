@@ -82,7 +82,8 @@ impl<'ctx> Weights<'ctx> {
             ..
         } = model;
 
-        let mut calculator = WeightMemCalculator::new(ctx.dev().alignment());
+        let align = ctx.dev().alignment();
+        let mut calculator = WeightMemCalculator::new(if align == 0 { 512 } else { align });
         let meta_dist = meta.distribute(dist);
         let blk_size = meta_dist.blk();
         let off_blks = (0..meta_dist.nblk)
