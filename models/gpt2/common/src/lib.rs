@@ -6,7 +6,6 @@ use common::Distribution;
 use gguf::ggml_quants::digit_layout::DigitLayout;
 
 pub use args::{Args as GPT2Args, Request as GPT2Request};
-pub use common::Contiguous;
 pub use compute::{BlkWeight, Gpt2Worker, Operators, WeightLoader};
 pub use storage::{BlkStorage as GPT2BlkStorage, Storage as GPT2Storage};
 pub use tensor::{RandomSample, Tensor};
@@ -16,6 +15,7 @@ pub mod ext {
         ggml_quants,
     };
 }
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum GPT2BlkWeight {
     AttnQkvB,
@@ -31,6 +31,7 @@ pub enum GPT2BlkWeight {
     FfnNormB,
     FfnNormW,
 }
+
 #[derive(Clone, Debug)]
 pub struct Gpt2Meta {
     pub dt_embd: DigitLayout,
@@ -72,6 +73,7 @@ impl Gpt2Meta {
             ..self.clone()
         }
     }
+
     pub fn blk(&self) -> GPT2BlkStorage<usize> {
         use TensorUsage::Storage as TensorMem;
         GPT2BlkStorage {

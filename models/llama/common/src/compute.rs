@@ -172,6 +172,7 @@ where
         let att = tensor(&[nh, max_seq_len, max_att_len]).take();
         let gate_up = tensor(&[if self.meta.is_moe() { 1 } else { nt }, di * 2]);
         let routes = tensor(&[nt, nexp]);
+        let mut routes_host = routes.clone().map(Blob::new).take();
 
         let workspace_size = *x1.get()
             + (*qkv.get() + q + att)
@@ -204,8 +205,7 @@ where
         for iblk in 0..nblk {
             {
                 let w = self.weights.attn_norm(iblk, queue);
-                self.rms_norm(&mut x1, &x, &w, workspace, queue_alloc)?;
-                drop(w);
+                self.rms_norm(&mut x1, &x, w, workspace, queue_alloc)?;
 
                 let (buf, workspace) = workspace.split_at_mut(*qkv.get());
                 let mut qkv = qkv.clone().map(|_| buf);
@@ -272,8 +272,7 @@ where
             self.all_reduce(&mut x, workspace, queue_alloc)?;
 
             let w = self.weights.ffn_norm(iblk, queue);
-            self.rms_norm(&mut x1, &x, &w, workspace, queue_alloc)?;
-            drop(w);
+            self.rms_norm(&mut x1, &x, w, workspace, queue_alloc)?;
 
             if !self.meta.is_moe() {
                 let (buf, workspace) = workspace.split_at_mut(*gate_up.get());
@@ -291,7 +290,6 @@ where
                 let residual = if self.id == 0 { 1. } else { 0. };
                 self.mat_mul(&mut x, residual, &gate, &w, 1., workspace, queue_alloc)?
             } else {
-                let mut routes_host = routes.clone().map(Blob::new).take();
                 // gate_inp
                 {
                     let (buf, workspace) = workspace.split_at_mut(*routes.get());
@@ -332,7 +330,7 @@ where
                     }
                 }
             }
-            self.all_reduce(&mut x, workspace, queue_alloc)?;
+            self.all_reduce(&mut x, workspace, queue_alloc)?
         }
         if logits.shape()[0] == 0 {
             return Ok(());
@@ -359,7 +357,7 @@ where
         {
             let inplace = unsafe { x.map_slice_static() };
             let w = self.weights.output_norm(queue);
-            self.rms_norm(&mut x, &inplace, &w, workspace, queue_alloc)?
+            self.rms_norm(&mut x, &inplace, w, workspace, queue_alloc)?
         }
         let w = self.weights.output(queue);
         self.mat_mul(&mut logits, 0., &x, &w, 1., workspace, queue_alloc)
@@ -397,7 +395,7 @@ where
         &self,
         y: &mut Tensor<Y>,
         x: &Tensor<X>,
-        w: &Tensor<W_>,
+        w: Tensor<W_>,
         workspace: &mut [ByteOf<Ops::Hardware>],
         queue_alloc: &QA,
     ) -> Result<(), LaunchError>

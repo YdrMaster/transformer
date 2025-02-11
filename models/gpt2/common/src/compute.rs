@@ -96,23 +96,6 @@ impl<Ops: Operators, W> Gpt2Worker<Ops, W> {
     pub const fn meta(&self) -> &Gpt2Meta {
         &self.meta
     }
-
-    pub fn workspace_size(&self, nt: usize, max_seq_len: usize, max_att_len: usize) -> usize {
-        let Gpt2Meta {
-            nh, nkvh, dh, di, ..
-        } = self.meta;
-
-        let embd = self.meta.embd(nt);
-        let dt = embd.dt();
-        let embd = embd.take();
-
-        let qkv = Tensor::new(dt, &[nt * (nh + nkvh + nkvh), dh]).take();
-        let q = Tensor::new(dt, &[max_seq_len, nh, dh]).take();
-        let att = Tensor::new(dt, &[nh, max_seq_len, max_att_len]).take();
-
-        let up = Tensor::new(dt, &[nt, di]).take();
-        embd + (qkv + q + att).max(up)
-    }
 }
 
 impl<Ops, W> Gpt2Worker<Ops, W>
@@ -153,13 +136,18 @@ where
             self.add_rows(&mut embd, &pos_embd, &idx, workspace, queue_alloc)?
         }
 
-        let nt = embd.shape()[0];
         let mut x = embd;
-        let x1 = Tensor::new(x.dt(), x.shape());
-        let qkv = Tensor::new(x.dt(), &[nt, (nh + nkvh + nkvh) * dh]);
-        let up = Tensor::new(x.dt(), &[nt, di]);
+        let nt = x.shape()[0];
 
-        let workspace_size = self.workspace_size(nt, max_seq_len, max_att_len);
+        let tensor = |shape: &[usize]| Tensor::new(x.dt(), shape);
+        let x1 = tensor(x.shape());
+        let qkv = tensor(&[nt, (nh + nkvh + nkvh) * dh]);
+        let q = tensor(&[max_seq_len, nh, dh]).take();
+        let att = tensor(&[nh, max_seq_len, max_att_len]).take();
+        let up = tensor(&[nt, di]);
+
+        let workspace_size = *x1.get() + (*qkv.get() + q + att).max(*up.get());
+
         let mut workspace = Workspace::new(queue_alloc, workspace, workspace_size);
         let (buf, workspace) = workspace.split_at_mut(*x1.get());
         let mut x1 = x1.map(|_| buf);
@@ -253,9 +241,9 @@ where
                 if src != dst {
                     let src = unsafe { x.map_slice_static() }.index(0, src);
                     let mut dst = x.map_slice_mut().index(0, dst);
-                    self.rearrange(&mut dst, &src, workspace, queue_alloc)?;
+                    self.rearrange(&mut dst, &src, workspace, queue_alloc)?
                 }
-                dst += 1;
+                dst += 1
             }
         }
         assert_eq!(dst, logits.shape()[0]);
