@@ -88,7 +88,7 @@ impl Drop for ChatTemplate {
 }
 
 static JINJA_ENV: LazyLock<RwLock<Environment<'_>>> = LazyLock::new(|| {
-    let mut env = Environment::empty();
+    let mut env = Environment::new();
     env.set_unknown_method_callback(|_, value, method, args| {
         use minijinja::{value::ValueKind as ThisType, ErrorKind::UnknownMethod, Value};
         match (method, value.kind(), args) {
