@@ -7,6 +7,7 @@ use itertools::izip;
 use operators::{
     all_reduce::{self, AllReduce, ReduceOp},
     attention_kv_cached::{self, AttnKVCached},
+    fuesd_softmax::AttnMask,
     mat_mul::{self, MatMul},
     rearrange::{self, Rearrange},
     rms_norm::{self, RmsNorm},
@@ -520,6 +521,7 @@ where
                 k_cache_base: kc.base_mut(),
                 v_cache_layout: vc.layout(),
                 v_cache_base: vc.base_mut(),
+                mask: AttnMask::Causal,
                 pos: pos.into(),
             },
             workspace,
