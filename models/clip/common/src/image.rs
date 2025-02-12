@@ -240,9 +240,9 @@ fn find_best_resize(
     // 如果允许放大或需要缩小
     if allow_upscale || w * h > scale_resolution.pow(2) {
         // 保持宽高比缩放尺寸，使面积等于 `sr²`
-        let r = (w as fdim / h as fdim).sqrt();
-        w = (scale_resolution as fdim * r) as _;
-        h = (scale_resolution as fdim / r) as _;
+        let r = w as fdim / h as fdim;
+        h = (scale_resolution as fdim / r.sqrt()) as _;
+        w = (h as fdim * r) as _;
     }
     // 确保宽高整除图块尺寸
     [w, h].map(|l| div_round(l, patch_size) * patch_size)
