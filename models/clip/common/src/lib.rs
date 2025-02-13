@@ -23,6 +23,7 @@ pub mod ext {
 #[derive(Clone, Debug)]
 pub struct ClipMeta {
     pub dt: DigitLayout,
+    pub dt_norm: DigitLayout,
 
     pub d_patch: usize,
     pub d_image: usize,
@@ -66,7 +67,7 @@ impl ClipMeta {
 
     pub fn norm(&self) -> Tensor<usize> {
         let &Self { d, .. } = self;
-        Tensor::new(self.dt, &[d])
+        Tensor::new(self.dt_norm, &[d])
     }
 
     pub fn attn_qkv_w(&self) -> Tensor<usize> {

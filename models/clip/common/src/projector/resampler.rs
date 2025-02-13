@@ -41,20 +41,20 @@ impl<'a> Storage<&'a [u8]> {
     #[rustfmt::skip]
     pub fn from_gguf(gguf: &GGufModel<'a>) -> Self {
         Self {
-            wkv   :  tensor![gguf => "resampler.kv.weight"    ].data ,
-            q     :  tensor![gguf => "resampler.query"        ].data ,
-            ln_q  : [tensor![gguf => "resampler.ln_q.weight"  ].data ,
-                     tensor![gguf => "resampler.ln_q.bias"    ].data],
-            ln_kv : [tensor![gguf => "resampler.ln_kv.weight" ].data ,
-                     tensor![gguf => "resampler.ln_kv.bias"   ].data],
-            attn_q: [tensor![gguf => "resampler.attn.q.weight"].data ,
-                     tensor![gguf => "resampler.attn.q.bias"  ].data],
-            attn_k: [tensor![gguf => "resampler.attn.k.weight"].data ,
-                     tensor![gguf => "resampler.attn.k.bias"  ].data],
-            attn_v: [tensor![gguf => "resampler.attn.v.weight"].data ,
-                     tensor![gguf => "resampler.attn.v.bias"  ].data],
-            attn_o: [tensor![gguf => "resampler.attn.o.weight"].data ,
-                     tensor![gguf => "resampler.attn.o.bias"  ].data],
+            wkv   :  tensor![gguf => "resampler.kv.weight"      ].data ,
+            q     :  tensor![gguf => "resampler.query"          ].data ,
+            ln_q  : [tensor![gguf => "resampler.ln_q.weight"    ].data ,
+                     tensor![gguf => "resampler.ln_q.bias"      ].data],
+            ln_kv : [tensor![gguf => "resampler.ln_kv.weight"   ].data ,
+                     tensor![gguf => "resampler.ln_kv.bias"     ].data],
+            attn_q: [tensor![gguf => "resampler.attn.q.weight"  ].data ,
+                     tensor![gguf => "resampler.attn.q.bias"    ].data],
+            attn_k: [tensor![gguf => "resampler.attn.k.weight"  ].data ,
+                     tensor![gguf => "resampler.attn.k.bias"    ].data],
+            attn_v: [tensor![gguf => "resampler.attn.v.weight"  ].data ,
+                     tensor![gguf => "resampler.attn.v.bias"    ].data],
+            attn_o: [tensor![gguf => "resampler.attn.out.weight"].data ,
+                     tensor![gguf => "resampler.attn.out.bias"  ].data],
         }
     }
 }

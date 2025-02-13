@@ -148,6 +148,7 @@ where
         let Args { raw, pos } = args;
         let ClipMeta {
             dt,
+            dt_norm,
             nblk,
             nh,
             nkvh,
@@ -267,7 +268,7 @@ where
 
                 let weights = &self.weights.weights;
                 let q0 = Tensor::new(dt, &[dq, d]).map(|_| weights.resampler_q(queue));
-                let ln_qkv = Tensor::new(dt, &[d]);
+                let ln_qkv = Tensor::new(dt_norm, &[d]);
 
                 let q = Tensor::new(dt, q0.shape());
                 let kv = Tensor::new(dt, &[np, d]);

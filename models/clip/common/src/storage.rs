@@ -36,6 +36,7 @@ pub struct BlkStorage<T> {
 impl<'a> Storage<&'a [u8]> {
     pub fn from_gguf(gguf: &GGufModel<'a>) -> Self {
         let pos_embd = &gguf.tensors["v.position_embd.weight"];
+        let ln1_0 = &gguf.tensors["v.blk.0.ln1.weight"];
 
         let d = meta![gguf => (usize) "clip.vision.embedding_length"];
         let nh = meta![gguf => (usize) "clip.vision.attention.head_count"];
@@ -43,6 +44,7 @@ impl<'a> Storage<&'a [u8]> {
         #[rustfmt::skip]
         let meta = ClipMeta {
             dt     : pos_embd.ty,
+            dt_norm: ln1_0.ty,
             d_patch: meta![gguf => (usize) "clip.vision.patch_size"],
             d_image: meta![gguf => (usize) "clip.vision.image_size"],
 
@@ -70,10 +72,10 @@ impl<'a> Storage<&'a [u8]> {
 
                 ffn_norm_w:  tensor![gguf => format!("v.blk.{i}.ln2.weight"     )].data,
                 ffn_norm_b:  tensor![gguf => format!("v.blk.{i}.ln2.bias"       )].data,
-                ffn_up_w:    tensor![gguf => format!("v.blk.{i}.ffn_up.weight"  )].data,
-                ffn_up_b:    tensor![gguf => format!("v.blk.{i}.ffn_up.bias"    )].data,
-                ffn_down_w:  tensor![gguf => format!("v.blk.{i}.ffn_down.weight")].data,
-                ffn_down_b:  tensor![gguf => format!("v.blk.{i}.ffn_down.bias"  )].data,
+                ffn_up_w:    tensor![gguf => format!("v.blk.{i}.ffn_down.weight")].data,
+                ffn_up_b:    tensor![gguf => format!("v.blk.{i}.ffn_down.bias"  )].data,
+                ffn_down_w:  tensor![gguf => format!("v.blk.{i}.ffn_up.weight"  )].data,
+                ffn_down_b:  tensor![gguf => format!("v.blk.{i}.ffn_up.bias"    )].data,
             })
             .collect();
 
@@ -100,7 +102,7 @@ fn get_rgb(gguf: &GGufModel, key: &str) -> [f32; 3] {
     let mut arr = gguf.get_f32_arr(key).unwrap();
     let mut ans = [0.0; 3];
     for x in ans.iter_mut() {
-        *x = arr.next().unwrap().unwrap();
+        *x = arr.next().unwrap().unwrap()
     }
     ans
 }
