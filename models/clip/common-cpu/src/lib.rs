@@ -128,6 +128,42 @@ impl WeightLoader for Weights<'_> {
             ProjectorStroage::Resampler(storage) => storage.ln_kv,
         }
     }
+
+    fn resampler_attn_q<'a>(
+        &'a self,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> [Self::Memory<'a>; 2] {
+        match &self.0.projector {
+            ProjectorStroage::Resampler(storage) => storage.attn_q,
+        }
+    }
+
+    fn resampler_attn_k<'a>(
+        &'a self,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> [Self::Memory<'a>; 2] {
+        match &self.0.projector {
+            ProjectorStroage::Resampler(storage) => storage.attn_k,
+        }
+    }
+
+    fn resampler_attn_v<'a>(
+        &'a self,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> [Self::Memory<'a>; 2] {
+        match &self.0.projector {
+            ProjectorStroage::Resampler(storage) => storage.attn_v,
+        }
+    }
+
+    fn resampler_attn_o<'a>(
+        &'a self,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> [Self::Memory<'a>; 2] {
+        match &self.0.projector {
+            ProjectorStroage::Resampler(storage) => storage.attn_o,
+        }
+    }
 }
 
 #[cfg(test)]

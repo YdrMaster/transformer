@@ -68,6 +68,10 @@ pub trait WeightLoader {
     fn resampler_q<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Memory<'a>;
     fn resampler_ln_q<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
     fn resampler_ln_kv<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
+    fn resampler_attn_q<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
+    fn resampler_attn_k<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
+    fn resampler_attn_v<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
+    fn resampler_attn_o<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
 }
 
 pub struct ClipWorker<Ops: Operators, W> {
@@ -259,7 +263,7 @@ where
         match &self.meta.projector {
             ProjectorMeta::Resampler(meta) => {
                 use super::projector::resampler::Meta;
-                let &Meta { d, dq } = meta;
+                let &Meta { d, dq, .. } = meta;
 
                 let weights = &self.weights.weights;
                 let q0 = Tensor::new(dt, &[dq, d]).map(|_| weights.resampler_q(queue));
@@ -275,7 +279,7 @@ where
                 let mut v = kv.clone().map(|_| buf_v);
 
                 let d0 = self.meta.d;
-                let w = Tensor::new(dt, &[d0, d]).map(|_| weights.resampler_wkv(queue));
+                let w = self.meta.mat(d, d0).map(|_| weights.resampler_wkv(queue));
                 self.mat_mul(&mut v, &x, (w, None), workspace, queue_alloc)?;
 
                 let [w, b] = weights.resampler_ln_q(queue);
@@ -289,7 +293,39 @@ where
 
                 let (buf, workspace) = workspace.split_at_mut(*kv.get());
                 let pos_embd = Tensor::new(dt, v.shape()).map(|_| buf);
-                self.add(&mut k, &v, &pos_embd, workspace, queue_alloc)?
+                self.add(&mut k, &v, &pos_embd, workspace, queue_alloc)?;
+
+                let attn_w = self.meta.mat(d, d);
+                let attn_b = self.meta.mat(d, 1);
+
+                let [w, b] = weights.resampler_attn_q(queue);
+                let attn_q = (attn_w.clone().map(|_| w), Some(attn_b.clone().map(|_| b)));
+
+                let [w, b] = weights.resampler_attn_k(queue);
+                let attn_k = (attn_w.clone().map(|_| w), Some(attn_b.clone().map(|_| b)));
+
+                let [w, b] = weights.resampler_attn_v(queue);
+                let attn_v = (attn_w.clone().map(|_| w), Some(attn_b.clone().map(|_| b)));
+
+                let [w, b] = weights.resampler_attn_o(queue);
+                let attn_o = (attn_w.clone().map(|_| w), Some(attn_b.clone().map(|_| b)));
+
+                let q_ = Tensor::new(dt, &[dq, d]);
+                let k_ = Tensor::new(dt, &[np, d]);
+                let v_ = Tensor::new(dt, &[np, d]);
+                // let mut o_ = todo!();
+
+                let (buf, workspace) = workspace.split_at_mut(*q_.get());
+                let mut q_ = q_.map(|_| buf);
+                self.mat_mul(&mut q_, &q, attn_q, workspace, queue_alloc)?;
+
+                let (buf, workspace) = workspace.split_at_mut(*k_.get());
+                let mut k_ = k_.map(|_| buf);
+                self.mat_mul(&mut k_, &k, attn_k, workspace, queue_alloc)?;
+
+                let (buf, workspace) = workspace.split_at_mut(*v_.get());
+                let mut v_ = v_.map(|_| buf);
+                self.mat_mul(&mut v_, &v, attn_v, workspace, queue_alloc)?;
             }
         }
 
