@@ -61,7 +61,7 @@ impl<'a> Storage<&'a [u8]> {
             projector : ProjectorMeta::from_gguf(gguf),
         };
         #[rustfmt::skip]
-        let blocks = (0..meta.nblk)
+        let blocks = (0..=meta.nblk)
             .map(|i| BlkStorage {
                 attn_norm_w: tensor![gguf => format!("v.blk.{i}.ln1.weight"     )].data,
                 attn_norm_b: tensor![gguf => format!("v.blk.{i}.ln1.bias"       )].data,

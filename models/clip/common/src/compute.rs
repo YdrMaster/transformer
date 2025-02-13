@@ -202,7 +202,7 @@ where
             self.layer_norm(&mut x, &inplace, wb, workspace, queue_alloc)?
         }
 
-        for iblk in 0..nblk {
+        for iblk in 0..=nblk {
             {
                 let wb = self.weights.attn_norm(iblk, queue);
                 self.layer_norm(&mut x1, &x, wb, workspace, queue_alloc)?;
