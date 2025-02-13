@@ -1,4 +1,4 @@
-use super::{args::Args, ClipMeta};
+use super::{args::Args, projector::ProjectorMeta, ClipMeta};
 use itertools::izip;
 use operators::{
     add::{self, Add},
@@ -63,6 +63,11 @@ pub trait WeightLoader {
     fn pre_norm<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Option<[Self::Memory<'a>; 2]>;
     fn post_norm<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>)
         -> Option<[Self::Memory<'a>; 2]>;
+
+    fn resampler_wkv<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Memory<'a>;
+    fn resampler_q<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Memory<'a>;
+    fn resampler_ln_q<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
+    fn resampler_ln_kv<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
 }
 
 pub struct ClipWorker<Ops: Operators, W> {
@@ -249,6 +254,43 @@ where
         if let Some(wb) = self.weights.post_norm(queue) {
             let inplace = unsafe { x.map_slice_static() };
             self.layer_norm(&mut x, &inplace, wb, workspace, queue_alloc)?
+        }
+
+        match &self.meta.projector {
+            ProjectorMeta::Resampler(meta) => {
+                use super::projector::resampler::Meta;
+                let &Meta { d, dq } = meta;
+
+                let weights = &self.weights.weights;
+                let q0 = Tensor::new(dt, &[dq, d]).map(|_| weights.resampler_q(queue));
+                let ln_qkv = Tensor::new(dt, &[d]);
+
+                let q = Tensor::new(dt, q0.shape());
+                let kv = Tensor::new(dt, &[np, d]);
+                let (buf_q, workspace) = workspace.split_at_mut(*q.get());
+                let (buf_k, workspace) = workspace.split_at_mut(*kv.get());
+                let (buf_v, workspace) = workspace.split_at_mut(*kv.get());
+                let mut q = q.map(|_| buf_q);
+                let mut k = kv.clone().map(|_| buf_k);
+                let mut v = kv.clone().map(|_| buf_v);
+
+                let d0 = self.meta.d;
+                let w = Tensor::new(dt, &[d0, d]).map(|_| weights.resampler_wkv(queue));
+                self.mat_mul(&mut v, &x, (w, None), workspace, queue_alloc)?;
+
+                let [w, b] = weights.resampler_ln_q(queue);
+                let ln_q = [ln_qkv.clone().map(|_| w), ln_qkv.clone().map(|_| b)];
+                self.layer_norm(&mut q, &q0, ln_q, workspace, queue_alloc)?;
+
+                let [w, b] = weights.resampler_ln_kv(queue);
+                let ln_v = [ln_qkv.clone().map(|_| w), ln_qkv.clone().map(|_| b)];
+                let inplace = unsafe { v.map_slice_static() };
+                self.layer_norm(&mut v, &inplace, ln_v, workspace, queue_alloc)?;
+
+                let (buf, workspace) = workspace.split_at_mut(*kv.get());
+                let pos_embd = Tensor::new(dt, v.shape()).map(|_| buf);
+                self.add(&mut k, &v, &pos_embd, workspace, queue_alloc)?
+            }
         }
 
         if self.debug {

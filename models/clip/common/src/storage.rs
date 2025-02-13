@@ -1,4 +1,7 @@
-﻿use crate::{ClipMeta, ProjectorType};
+﻿use crate::{
+    projector::{ProjectorMeta, ProjectorStroage},
+    ClipMeta,
+};
 use gguf::{meta, tensor, GGufMetaMapExt, GGufModel};
 
 #[derive(Clone)]
@@ -10,6 +13,7 @@ pub struct Storage<T> {
     pub pre_norm: Option<[T; 2]>,
     pub post_norm: Option<[T; 2]>,
     pub blocks: Box<[BlkStorage<T>]>,
+    pub projector: ProjectorStroage<T>,
 }
 
 #[derive(Clone, Copy)]
@@ -33,22 +37,11 @@ impl<'a> Storage<&'a [u8]> {
     pub fn from_gguf(gguf: &GGufModel<'a>) -> Self {
         let pos_embd = &gguf.tensors["v.position_embd.weight"];
 
-        let projector = match gguf.get_str("clip.projector_type").unwrap() {
-            "mlp" => ProjectorType::Mlp,
-            "ldp" => ProjectorType::Ldp,
-            "ldpv2" => ProjectorType::LdpV2,
-            "resampler" => ProjectorType::Resampler,
-            _ => ProjectorType::Unknown,
-        };
-
         let d = meta![gguf => (usize) "clip.vision.embedding_length"];
         let nh = meta![gguf => (usize) "clip.vision.attention.head_count"];
 
         #[rustfmt::skip]
         let meta = ClipMeta {
-            projector,
-            minicpmv_version: meta![gguf => (usize) "clip.minicpmv_version"] as _,
-
             dt     : pos_embd.ty,
             d_patch: meta![gguf => (usize) "clip.vision.patch_size"],
             d_image: meta![gguf => (usize) "clip.vision.image_size"],
@@ -62,9 +55,11 @@ impl<'a> Storage<&'a [u8]> {
             image_mean: get_rgb(gguf, "clip.vision.image_mean"),
             image_std : get_rgb(gguf, "clip.vision.image_std" ),
             epsilon   : gguf.get_f32("clip.vision.attention.layer_norm_epsilon").unwrap(),
+
+            projector : ProjectorMeta::from_gguf(gguf),
         };
         #[rustfmt::skip]
-        let blocks = (0..=meta.nblk)
+        let blocks = (0..meta.nblk)
             .map(|i| BlkStorage {
                 attn_norm_w: tensor![gguf => format!("v.blk.{i}.ln1.weight"     )].data,
                 attn_norm_b: tensor![gguf => format!("v.blk.{i}.ln1.bias"       )].data,
@@ -96,6 +91,7 @@ impl<'a> Storage<&'a [u8]> {
                 .get("v.post_ln.weight")
                 .map(|w| [w.data, tensor![gguf => "v.post_ln.bias"].data]),
             blocks,
+            projector: ProjectorStroage::from_gguf(gguf),
         }
     }
 }

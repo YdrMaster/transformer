@@ -1,4 +1,4 @@
-use clip::{BlkWeight, ClipBlkStorage, ClipStorage, Tensor, WeightLoader};
+use clip::{BlkWeight, ClipBlkStorage, ClipStorage, ProjectorStroage, Tensor, WeightLoader};
 use operators::{common_cpu::Cpu, conv, ByteOf, QueueOf, TopoNode};
 use std::{marker::PhantomData, ops::Deref};
 
@@ -103,6 +103,30 @@ impl WeightLoader for Weights<'_> {
         _queue: &'a QueueOf<Self::Hardware>,
     ) -> Option<[Self::Memory<'a>; 2]> {
         self.0.post_norm
+    }
+
+    fn resampler_wkv<'a>(&'a self, _queue: &'a QueueOf<Self::Hardware>) -> Self::Memory<'a> {
+        match &self.0.projector {
+            ProjectorStroage::Resampler(storage) => storage.wkv,
+        }
+    }
+
+    fn resampler_q<'a>(&'a self, _queue: &'a QueueOf<Self::Hardware>) -> Self::Memory<'a> {
+        match &self.0.projector {
+            ProjectorStroage::Resampler(storage) => storage.q,
+        }
+    }
+
+    fn resampler_ln_q<'a>(&'a self, _queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2] {
+        match &self.0.projector {
+            ProjectorStroage::Resampler(storage) => storage.ln_q,
+        }
+    }
+
+    fn resampler_ln_kv<'a>(&'a self, _queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2] {
+        match &self.0.projector {
+            ProjectorStroage::Resampler(storage) => storage.ln_kv,
+        }
     }
 }
 
