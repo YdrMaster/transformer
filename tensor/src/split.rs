@@ -68,3 +68,12 @@ macro_rules! split {
         assert!(parts.next().is_none());
     };
 }
+#[macro_export]
+macro_rules! split_mut {
+    ($tensor:expr => $( $name:ident ),+; [$( $part:expr ),+] @ $axis:expr) => {
+        let parts = [$($part),+];
+        let mut parts = $tensor.split($axis, &parts);
+        $( let mut $name = parts.next().unwrap(); )+
+        assert!(parts.next().is_none());
+    };
+}

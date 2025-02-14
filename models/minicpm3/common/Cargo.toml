@@ -1,0 +1,18 @@
+[package]
+name = "minicpm3"
+version = "0.0.0"
+edition = "2021"
+authors = ["onenewcode <lovestudy@qq.com>", "YdrMaster <ydrml@hotmail.com>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+common.workspace = true
+gguf.workspace = true
+tensor.workspace = true
+operators.workspace = true
+itertools.workspace = true
+half = "2.4"
+
+[dev-dependencies]
+test-utils.workspace = true
