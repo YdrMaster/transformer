@@ -145,7 +145,11 @@ where
         QA: QueueAlloc<Hardware = Ops::Hardware>,
     {
         let time = Instant::now();
-        let Args { raw, pos } = args;
+        let Args {
+            raw,
+            pos,
+            pos_resampler,
+        } = args;
         let ClipMeta {
             dt,
             dt_norm,
@@ -176,14 +180,16 @@ where
         let mut embd = Tensor::new(embd_.dt(), embd_.shape()).map(|s| queue_alloc.alloc(s));
         self.rearrange(&mut embd, &embd_, workspace, queue_alloc)?;
 
-        {
-            let pos_embd = self.weights.pos_embd(queue);
-            self.add_rows(&mut embd, &pos_embd, &pos, workspace, queue_alloc)?
-        }
-
         let &[batch, size, _] = embd.shape() else {
             unreachable!()
         };
+
+        {
+            let pos_embd = self.weights.pos_embd(queue);
+            let pos = pos.broadcast(0, batch);
+            self.add_rows(&mut embd, &pos_embd, &pos, workspace, queue_alloc)?
+        }
+
         let batch_split = vec![size; batch];
 
         let np = batch * size;
@@ -281,6 +287,7 @@ where
 
                 let d0 = self.meta.d;
                 let w = self.meta.mat(d, d0).map(|_| weights.resampler_wkv(queue));
+                // (np d0) <- (np d) · (d d0)
                 self.mat_mul(&mut v, &x, (w, None), workspace, queue_alloc)?;
 
                 let [w, b] = weights.resampler_ln_q(queue);
@@ -292,9 +299,12 @@ where
                 let inplace = unsafe { v.map_slice_static() };
                 self.layer_norm(&mut v, &inplace, ln_v, workspace, queue_alloc)?;
 
-                let (buf, workspace) = workspace.split_at_mut(*kv.get());
-                let pos_embd = Tensor::new(dt, v.shape()).map(|_| buf);
-                self.add(&mut k, &v, &pos_embd, workspace, queue_alloc)?;
+                {
+                    let mut k = k.map_slice_mut().tile(0, &[batch, size]);
+                    let v = v.map_slice().tile(0, &[batch, size]);
+                    let pos = pos_resampler.broadcast(0, batch);
+                    self.add(&mut k, &v, &pos, workspace, queue_alloc)?
+                }
 
                 let attn_w = self.meta.mat(d, d);
                 let attn_b = self.meta.mat(d, 1);

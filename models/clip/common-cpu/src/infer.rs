@@ -1,6 +1,9 @@
 ﻿use crate::{Operators, Weights};
 use clip::{ClipArgs, ClipMeta, ClipStorage, ClipWorker, Image, Tensor, D_POS_EMBD};
-use gguf::{ggml_quants::digit_layout::types as ty, GGufModel};
+use gguf::{
+    ggml_quants::{digit_layout::types as ty, f16},
+    GGufModel,
+};
 use operators::{
     common_cpu::{Cpu, ThisThread},
     Blob,
@@ -53,7 +56,8 @@ fn test_infer() {
         .launch(
             ClipArgs {
                 raw: whole.to_nchw(),
-                pos: pos70(1, whole.shape(), d_patch).map_slice(),
+                pos: pos70(whole.shape(), d_patch).map_slice(),
+                pos_resampler: pos_resampler(3584, whole.shape(), d_patch).map_slice(),
             },
             &mut [],
             &ThisThread,
@@ -61,14 +65,15 @@ fn test_infer() {
         .unwrap();
 
     if let Some(patches) = slices.patches_nchw() {
-        let &[n, 3, h, w] = patches.shape() else {
+        let &[_, 3, h, w] = patches.shape() else {
             unreachable!()
         };
         worker
             .launch(
                 ClipArgs {
                     raw: patches.map_slice(),
-                    pos: pos70(n, [w, h], d_patch).map_slice(),
+                    pos: pos70([w, h], d_patch).map_slice(),
+                    pos_resampler: pos_resampler(3584, [w, h], d_patch).map_slice(),
                 },
                 &mut [],
                 &ThisThread,
@@ -77,7 +82,7 @@ fn test_infer() {
     }
 }
 
-fn pos70(n: usize, [w, h]: [usize; 2], d_patch: usize) -> Tensor<Blob> {
+fn pos70([w, h]: [usize; 2], d_patch: usize) -> Tensor<Blob> {
     let w = w / d_patch;
     let h = h / d_patch;
 
@@ -95,15 +100,15 @@ fn pos70(n: usize, [w, h]: [usize; 2], d_patch: usize) -> Tensor<Blob> {
         data[i] = (y * D_POS_EMBD + x) as _;
     }
 
-    ans.broadcast(0, n)
+    ans
 }
 
-fn pos_resampler(d: usize, n: usize, [w, h]: [usize; 2], d_patch: usize) -> Tensor<Blob> {
+fn pos_resampler(d: usize, [w, h]: [usize; 2], d_patch: usize) -> Tensor<Blob> {
     let w = w / d_patch;
     let h = h / d_patch;
 
-    let mut ans = Tensor::new(ty::F32, &[1, h * w, d]).map(Blob::new);
-    let (&mut [], data, &mut []) = (unsafe { ans.get_mut().align_to_mut::<f32>() }) else {
+    let mut ans = Tensor::new(ty::F16, &[1, h * w, d]).map(Blob::new);
+    let (&mut [], data, &mut []) = (unsafe { ans.get_mut().align_to_mut::<f16>() }) else {
         panic!()
     };
 
@@ -118,15 +123,15 @@ fn pos_resampler(d: usize, n: usize, [w, h]: [usize; 2], d_patch: usize) -> Tens
         let d = d / 4;
         for i in 0..d {
             let (sin, cos) = cache[c * d + i];
-            data[0 * d..][i] = sin;
-            data[1 * d..][i] = cos;
+            data[0 * d..][i] = f16::from_f32(sin);
+            data[1 * d..][i] = f16::from_f32(cos);
             let (sin, cos) = cache[r * d + i];
-            data[2 * d..][i] = sin;
-            data[3 * d..][i] = cos;
+            data[2 * d..][i] = f16::from_f32(sin);
+            data[3 * d..][i] = f16::from_f32(cos);
         }
     }
 
-    ans.broadcast(0, n)
+    ans
 }
 
 fn sin_cos_cache(max_idx: usize, d: usize, theta: f32) -> Vec<(f32, f32)> {

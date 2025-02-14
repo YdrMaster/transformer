@@ -4,6 +4,8 @@ use tensor::Tensor;
 pub struct Args<'a, H: Hardware> {
     /// shape: [n, c, h, w]
     pub raw: Tensor<&'a [H::Byte]>,
-    /// shape: [n, h x w]
+    /// shape: [h x w]
     pub pos: Tensor<&'a [H::Byte]>,
+    /// shape: [h x w, resampler.d]
+    pub pos_resampler: Tensor<&'a [H::Byte]>,
 }
