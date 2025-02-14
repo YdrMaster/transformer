@@ -72,6 +72,7 @@ pub trait WeightLoader {
     fn resampler_attn_k<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
     fn resampler_attn_v<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
     fn resampler_attn_o<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
+    fn resampler_proj<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Memory<'a>;
 }
 
 pub struct ClipWorker<Ops: Operators, W> {
@@ -190,8 +191,6 @@ where
             self.add_rows(&mut embd, &pos_embd, &pos, workspace, queue_alloc)?
         }
 
-        let batch_split = vec![size; batch];
-
         let np = batch * size;
         let mut x = embd.merge(0..2).unwrap();
         let x1 = Tensor::new(x.dt(), x.shape());
@@ -225,17 +224,12 @@ where
                 let k = k;
                 let v = v;
                 {
-                    let q = q.map_slice_mut().transpose(&[1, 0]);
+                    let mut q = q.map_slice_mut().transpose(&[1, 0]);
                     let k = k.map_slice().transpose(&[1, 0]);
                     let v = v.map_slice().transpose(&[1, 0]);
-                    let q = q.split(1, &batch_split);
-                    let k = k.split(1, &batch_split);
-                    let v = v.split(1, &batch_split);
 
-                    for (mut q, k, v) in izip!(q, k, v) {
-                        let mut o = unsafe { q.map_slice_static_mut() };
-                        self.attn(&mut q, &k, &v, &mut o, workspace, queue_alloc)?
-                    }
+                    let mut o = unsafe { q.map_slice_static_mut() };
+                    self.attn(&mut q, &k, &v, &mut o, workspace, queue_alloc)?
                 }
                 let o = q.map_slice().merge(1..3).unwrap();
                 let [w, b] = self.weights.attn_o(iblk, queue);
@@ -270,7 +264,7 @@ where
         match &self.meta.projector {
             ProjectorMeta::Resampler(meta) => {
                 use super::projector::resampler::Meta;
-                let &Meta { d, dq, .. } = meta;
+                let &Meta { d, dq, dh } = meta;
 
                 let weights = &self.weights.weights;
                 let q0 = Tensor::new(dt, &[dq, d]).map(|_| weights.resampler_q(queue));
@@ -321,14 +315,24 @@ where
                 let [w, b] = weights.resampler_attn_o(queue);
                 let attn_o = (attn_w.clone().map(|_| w), Some(attn_b.clone().map(|_| b)));
 
-                let q_ = Tensor::new(dt, &[dq, d]);
+                let q_ = Tensor::new(dt, &[batch, dq, d]);
                 let k_ = Tensor::new(dt, &[np, d]);
                 let v_ = Tensor::new(dt, &[np, d]);
-                // let mut o_ = todo!();
+                let o_ = Tensor::new(dt, &[batch * dq, d]);
 
                 let (buf, workspace) = workspace.split_at_mut(*q_.get());
                 let mut q_ = q_.map(|_| buf);
-                self.mat_mul(&mut q_, &q, attn_q, workspace, queue_alloc)?;
+                {
+                    let mut q_ = q_.map_slice_mut().index(0, 0);
+                    self.mat_mul(&mut q_, &q, attn_q, workspace, queue_alloc)?
+                }
+                if batch > 1 {
+                    split!(q_ => q0, q1; [1, batch - 1] @ 0);
+                    let q0 = q0.broadcast(0, batch - 1);
+                    let mut q1 = q1;
+                    self.rearrange(&mut q1, &q0, workspace, queue_alloc)?
+                }
+                let mut q_ = q_.merge(0..2).unwrap();
 
                 let (buf, workspace) = workspace.split_at_mut(*k_.get());
                 let mut k_ = k_.map(|_| buf);
@@ -337,6 +341,33 @@ where
                 let (buf, workspace) = workspace.split_at_mut(*v_.get());
                 let mut v_ = v_.map(|_| buf);
                 self.mat_mul(&mut v_, &v, attn_v, workspace, queue_alloc)?;
+
+                {
+                    let nh_dh = &[d / dh, dh];
+                    let q = q_.map_slice_mut().tile(1, nh_dh).transpose(&[1, 0]);
+                    let k = k_.tile(1, nh_dh).transpose(&[1, 0]);
+                    let v = v_.tile(1, nh_dh).transpose(&[1, 0]);
+
+                    let split_q = vec![dq; batch];
+                    let split_kv = vec![size; batch];
+                    let q = q.split(1, &split_q);
+                    let k = k.split(1, &split_kv);
+                    let v = v.split(1, &split_kv);
+
+                    for (mut q, k, v) in izip!(q, k, v) {
+                        let mut o = unsafe { q.map_slice_static_mut() };
+                        self.attn(&mut q, &k, &v, &mut o, workspace, queue_alloc)?
+                    }
+                }
+                let o = q_;
+
+                let (buf, workspace) = workspace.split_at_mut(*o_.get());
+                let mut o_ = o_.map(|_| buf);
+                self.mat_mul(&mut o_, &o, attn_o, workspace, queue_alloc)?;
+
+                let mut out = o;
+                let w = attn_w.map(|_| weights.resampler_proj(queue));
+                self.mat_mul(&mut out, &o_, (w, None), workspace, queue_alloc)?
             }
         }
 

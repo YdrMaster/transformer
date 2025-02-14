@@ -35,6 +35,7 @@ pub struct Storage<T> {
     pub attn_k: [T; 2],
     pub attn_v: [T; 2],
     pub attn_o: [T; 2],
+    pub proj: T,
 }
 
 impl<'a> Storage<&'a [u8]> {
@@ -55,6 +56,7 @@ impl<'a> Storage<&'a [u8]> {
                      tensor![gguf => "resampler.attn.v.bias"    ].data],
             attn_o: [tensor![gguf => "resampler.attn.out.weight"].data ,
                      tensor![gguf => "resampler.attn.out.bias"  ].data],
+            proj  :  tensor![gguf => "resampler.proj.weight"    ].data ,
         }
     }
 }
