@@ -165,6 +165,15 @@ impl WeightLoader for Weights<'_> {
         }
     }
 
+    fn resampler_ln_post<'a>(
+        &'a self,
+        _queue: &'a QueueOf<Self::Hardware>,
+    ) -> [Self::Memory<'a>; 2] {
+        match &self.0.projector {
+            ProjectorStroage::Resampler(storage) => storage.ln_post,
+        }
+    }
+
     fn resampler_proj<'a>(&'a self, _queue: &'a QueueOf<Self::Hardware>) -> Self::Memory<'a> {
         match &self.0.projector {
             ProjectorStroage::Resampler(storage) => storage.proj,

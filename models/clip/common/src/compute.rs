@@ -72,6 +72,8 @@ pub trait WeightLoader {
     fn resampler_attn_k<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
     fn resampler_attn_v<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
     fn resampler_attn_o<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> [Self::Memory<'a>; 2];
+    fn resampler_ln_post<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>)
+        -> [Self::Memory<'a>; 2];
     fn resampler_proj<'a>(&'a self, queue: &'a QueueOf<Self::Hardware>) -> Self::Memory<'a>;
 }
 
@@ -268,7 +270,7 @@ where
 
                 let weights = &self.weights.weights;
                 let q0 = Tensor::new(dt, &[dq, d]).map(|_| weights.resampler_q(queue));
-                let ln_qkv = Tensor::new(dt_norm, &[d]);
+                let ln = Tensor::new(dt_norm, &[d]);
 
                 let q = Tensor::new(dt, q0.shape());
                 let kv = Tensor::new(dt, &[np, d]);
@@ -285,11 +287,11 @@ where
                 self.mat_mul(&mut v, &x, (w, None), workspace, queue_alloc)?;
 
                 let [w, b] = weights.resampler_ln_q(queue);
-                let ln_q = [ln_qkv.clone().map(|_| w), ln_qkv.clone().map(|_| b)];
+                let ln_q = [ln.clone().map(|_| w), ln.clone().map(|_| b)];
                 self.layer_norm(&mut q, &q0, ln_q, workspace, queue_alloc)?;
 
                 let [w, b] = weights.resampler_ln_kv(queue);
-                let ln_v = [ln_qkv.clone().map(|_| w), ln_qkv.clone().map(|_| b)];
+                let ln_v = [ln.clone().map(|_| w), ln.clone().map(|_| b)];
                 let inplace = unsafe { v.map_slice_static() };
                 self.layer_norm(&mut v, &inplace, ln_v, workspace, queue_alloc)?;
 
@@ -315,34 +317,34 @@ where
                 let [w, b] = weights.resampler_attn_o(queue);
                 let attn_o = (attn_w.clone().map(|_| w), Some(attn_b.clone().map(|_| b)));
 
-                let q_ = Tensor::new(dt, &[batch, dq, d]);
-                let k_ = Tensor::new(dt, &[np, d]);
-                let v_ = Tensor::new(dt, &[np, d]);
-                let o_ = Tensor::new(dt, &[batch * dq, d]);
+                let qo = Tensor::new(dt, &[batch * dq, d]);
 
-                let (buf, workspace) = workspace.split_at_mut(*q_.get());
-                let mut q_ = q_.map(|_| buf);
+                let (buf, workspace) = workspace.split_at_mut(*qo.get());
+                let mut q_ = qo.clone().map(|_| buf);
                 {
-                    let mut q_ = q_.map_slice_mut().index(0, 0);
-                    self.mat_mul(&mut q_, &q, attn_q, workspace, queue_alloc)?
+                    let mut q_ = q_.map_slice_mut().tile(0, &[batch, dq]);
+                    {
+                        let mut q_ = q_.map_slice_mut().index(0, 0);
+                        self.mat_mul(&mut q_, &q, attn_q, workspace, queue_alloc)?
+                    }
+                    if batch > 1 {
+                        split!(q_ => q0, q1; [1, batch - 1] @ 0);
+                        let q0 = q0.broadcast(0, batch - 1);
+                        let mut q1 = q1;
+                        self.rearrange(&mut q1, &q0, workspace, queue_alloc)?
+                    }
                 }
-                if batch > 1 {
-                    split!(q_ => q0, q1; [1, batch - 1] @ 0);
-                    let q0 = q0.broadcast(0, batch - 1);
-                    let mut q1 = q1;
-                    self.rearrange(&mut q1, &q0, workspace, queue_alloc)?
-                }
-                let mut q_ = q_.merge(0..2).unwrap();
-
-                let (buf, workspace) = workspace.split_at_mut(*k_.get());
-                let mut k_ = k_.map(|_| buf);
-                self.mat_mul(&mut k_, &k, attn_k, workspace, queue_alloc)?;
-
-                let (buf, workspace) = workspace.split_at_mut(*v_.get());
-                let mut v_ = v_.map(|_| buf);
-                self.mat_mul(&mut v_, &v, attn_v, workspace, queue_alloc)?;
-
                 {
+                    let kv = Tensor::new(dt, &[np, d]);
+
+                    let (buf, workspace) = workspace.split_at_mut(*kv.get());
+                    let mut k_ = kv.clone().map(|_| buf);
+                    self.mat_mul(&mut k_, &k, attn_k, workspace, queue_alloc)?;
+
+                    let (buf, workspace) = workspace.split_at_mut(*kv.get());
+                    let mut v_ = kv.map(|_| buf);
+                    self.mat_mul(&mut v_, &v, attn_v, workspace, queue_alloc)?;
+
                     let nh_dh = &[d / dh, dh];
                     let q = q_.map_slice_mut().tile(1, nh_dh).transpose(&[1, 0]);
                     let k = k_.tile(1, nh_dh).transpose(&[1, 0]);
@@ -361,9 +363,14 @@ where
                 }
                 let o = q_;
 
-                let (buf, workspace) = workspace.split_at_mut(*o_.get());
-                let mut o_ = o_.map(|_| buf);
+                let (buf, workspace) = workspace.split_at_mut(*qo.get());
+                let mut o_ = qo.map(|_| buf);
                 self.mat_mul(&mut o_, &o, attn_o, workspace, queue_alloc)?;
+
+                let [w, b] = weights.resampler_ln_post(queue);
+                let ln_post = [ln.clone().map(|_| w), ln.clone().map(|_| b)];
+                let inplace = unsafe { o_.map_slice_static() };
+                self.layer_norm(&mut o_, &inplace, ln_post, workspace, queue_alloc)?;
 
                 let mut out = o;
                 let w = attn_w.map(|_| weights.resampler_proj(queue));
