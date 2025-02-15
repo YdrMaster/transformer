@@ -31,7 +31,7 @@ causal-lm.path = "causal-lm"
 test-utils.path = "test-utils"
 
 ggus = "0.4"
-ndarray-layout = "0.0"
+ndarray-layout = "0.1"
 log = "0.4"
 regex = "1.11"
 itertools = "0.13"

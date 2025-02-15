@@ -84,7 +84,7 @@ impl<T> Tensor<T> {
 
         let merged = self
             .layout
-            .merge(0..self.layout.ndim())
+            .merge_be(0, self.layout.ndim())
             .expect("dense tensor is castable");
         let &[d] = merged.shape() else { unreachable!() };
         let &[s] = merged.strides() else {
@@ -177,7 +177,7 @@ impl<T> Tensor<T> {
     #[inline]
     pub fn is_contiguous(&self) -> bool {
         // 任意相邻的两个维度可以合并表示张量完全连续
-        (2..=self.layout.ndim()).all(|i| self.layout.merge(i - 2..i).is_some())
+        (2..=self.layout.ndim()).all(|i| self.layout.merge_be(i - 2, 2).is_some())
     }
 
     /// 判断张量是否稠密存储。
@@ -186,7 +186,7 @@ impl<T> Tensor<T> {
         // 张量为稠密存储，当：
         self.layout
             // 所有维度可以合并成一个
-            .merge(0..self.layout.ndim())
+            .merge_be(0, self.layout.ndim())
             // 合并后元素之间步长等于元素的长度
             .is_some_and(|layout| {
                 let [s] = layout.strides() else {
@@ -198,7 +198,7 @@ impl<T> Tensor<T> {
 
     #[inline]
     pub fn get_contiguous_bytes(&self) -> Option<usize> {
-        let layout = self.layout.merge(0..self.layout.ndim())?;
+        let layout = self.layout.merge_be(0, self.layout.ndim())?;
         let &[size] = layout.shape() else {
             unreachable!()
         };
@@ -303,7 +303,7 @@ impl<T> Tensor<T> {
     #[inline]
     pub fn merge(self, range: Range<usize>) -> Option<Self> {
         self.layout
-            .merge(range)
+            .merge_be(range.start, range.len())
             .map(|layout| Self { layout, ..self })
     }
 }
