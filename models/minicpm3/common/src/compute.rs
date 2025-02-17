@@ -9,12 +9,12 @@ use operators::{
     add::{self, Add},
     all_reduce::{self, AllReduce, ReduceOp},
     attention::{self, Attention},
-    attention_kv_cached::{AttnKVCached},
+    attention_kv_cached::AttnKVCached,
     fuesd_softmax::AttnMask,
     mat_mul::{self, MatMul},
     rearrange::{self, Rearrange},
     rms_norm::{self, RmsNorm},
-    rope::{self, Rope, SinCosTable},
+    rope::{self, Rope, Seq, SinCosTable},
     swiglu::{self, Swiglu},
     ByteOf, Hardware, LaunchError, Operator, QueueAlloc, QueueOf, TopoNode, Workspace,
 };
@@ -135,7 +135,7 @@ where
     {
         let Args {
             embd: mut x,
-            logits,
+            mut logits,
             requests,
             num_tokens: nt,
             sin_cos,
@@ -151,7 +151,6 @@ where
             dkv_lora,
             dv,
             dt_embd,
-            
             ..
         } = self.meta;
         // llama.cpp 定义死
@@ -171,12 +170,23 @@ where
         let (buf, workspace) = workspace.split_at_mut(*x1.get());
         let mut x1 = x1.map(|_| buf);
 
-        // 经行 attention
-        let attn = tensor(&[nt, nh, dv]);
-        let (buf, workspace) = workspace.split_at_mut(*attn.get());
-        let mut attn = attn.map(|_| buf);
 
         let queue = queue_alloc.queue();
+
+        let sin = sin_cos.clone().index(0, 0);
+        let cos = sin_cos.index(0, 1);
+
+        let pos = Tensor::new(self.dt_pos, &[nt]).map(|_| {
+            Ops::Rope::build_pos(
+                self.dt_pos,
+                nt,
+                requests.iter().map(|req| Seq {
+                    pos: req.pos,
+                    len: req.seq_len,
+                }),
+                queue_alloc,
+            )
+        });
         // 缩放
         let inplace = unsafe { x.map_slice_static() };
         self.scale(&mut x, &inplace, scale_emb, workspace, queue_alloc)?;
@@ -232,44 +242,6 @@ where
 
                 split_mut!(kv =>  k_nope ,v ; [dnope  , dv ] @ 2);
 
-                /// longrope
-                pub fn longrope(
-                    embd: &mut [f32],
-                    pos: f32,
-                    theta: f32,
-                    long_factor: &[f32],
-                    short_factor: &[f32],
-                    max_pos: f32,
-                    origin_max_pos: f32,
-                ) {
-                    use std::slice::from_raw_parts_mut;
-                    // 计算 scaling_factor
-                    let scaling_factor =
-                        1.0 + ((max_pos / origin_max_pos).ln() / origin_max_pos.ln()).sqrt();
-                    let factor = if pos > origin_max_pos {
-                        long_factor
-                    } else {
-                        short_factor
-                    };
-                    let dh = embd.len() / 2;
-                    let embd =
-                        unsafe { from_raw_parts_mut(embd.as_mut_ptr().cast::<[f32; 2]>(), dh) };
-                    for (i, pair) in embd.iter_mut().enumerate() {
-                        let theta = theta.powf(-(i as f32 / dh as f32));
-                        let freq = pos * theta * factor.get(i).unwrap().recip();
-                        let (sin, cos) = freq.sin_cos();
-                        let (sin, cos) = (sin * scaling_factor, cos * scaling_factor);
-                        let [a, b] = *pair;
-                        *pair = [a * cos - b * sin, a * sin + b * cos];
-                    }
-                }
-                let cast = |t: *const f32| -> &'static [f32] {
-                    unsafe { std::slice::from_raw_parts(t, dh / 2) }
-                };
-                let [long_factor, short_factor] = self.weights.factor(queue);
-                let long_factor = cast(long_factor.base().cast());
-                let short_factor = cast(short_factor.base().cast());
-
                 //  k   [1, 3840]
                 let k = tensor(&[nt, nh, dk]);
                 let (buf, workspace) = workspace.split_at_mut(*k.get());
@@ -277,50 +249,24 @@ where
 
                 split_mut!(k =>  k_nope_r ,k_rope_r ; [dnope, dh] @ 2);
 
-                let pos = requests.last().unwrap().pos as f32;
-                let (max_pos, origin_max_pos) = (100f32, 100f32);
-
-                // q 嵌入
-                (0..nh).for_each(|i| {
-                    let tmp_q = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            q_rope.base_mut().cast::<f32>().add(i * 32),
-                            32,
-                        )
-                    };
-                    longrope(
-                        tmp_q,
-                        pos,
-                        self.meta.theta,
-                        long_factor,
-                        short_factor,
-                        max_pos,
-                        origin_max_pos,
-                    );
-                });
-                //  k 嵌入
-
-                let k_rope_1 =
-                    unsafe { std::slice::from_raw_parts_mut(k_rope.base_mut().cast::<f32>(), 32) };
-                longrope(
-                    k_rope_1,
-                    pos,
-                    self.meta.theta,
-                    long_factor,
-                    short_factor,
-                    max_pos,
-                    origin_max_pos,
-                );
-
-                // 经行广播和拷贝
-                let k_rope = k_rope.tile(1, &[1, dh]).broadcast(1, nh);
+                self.rope(&mut q_rope, &pos, &sin, &cos, workspace, queue_alloc)?;
+                let mut k_rope = k_rope.tile(1, &[1, dh]);
+                self.rope(&mut k_rope, &pos, &sin, &cos, workspace, queue_alloc)?;
+                let k_rope = k_rope.broadcast(1, nh);
                 self.rearrange(&mut k_rope_r, &k_rope, workspace, queue_alloc)?;
                 self.rearrange(&mut k_nope_r, &k_nope, workspace, queue_alloc)?;
 
+                let pos = requests.last().unwrap().pos as f32;
                 let mut q = q3.transpose(&[1, 0]);
                 let k = k.map_slice().transpose(&[1, 0]);
                 let v = v.map_slice_mut().transpose(&[1, 0]);
+                        // 经行 attention
+                let attn = tensor(&[nt, nh, dv]);
+                let (buf, workspace) = workspace.split_at_mut(*attn.get());
+                let mut attn = attn.map(|_| buf);
+                
                 let mut attn = unsafe { attn.map_slice_mut().transpose(&[1, 0]) };
+                let pos = requests.last().unwrap().pos as f32;
                 self.attnention(
                     &mut q,
                     &k,
@@ -378,8 +324,7 @@ where
         if logits.shape()[0] == 0 {
             return Ok(());
         }
-        Ops::debug(&x, queue);
-        todo!();
+
         // 集中要采样的 token
         // NOTICE: 输入之前将请求按 seq len 升序排列可降低移动开销
         let mut dst = 0;
@@ -404,6 +349,8 @@ where
             self.rms_norm(&mut x, &inplace, &w, workspace, queue_alloc)?
         }
         let w = self.weights.output(queue);
+        Ops::debug(&x, queue);
+        todo!();
         self.mat_mul(&mut logits, 0., &x, &w, 1., workspace, queue_alloc)
     }
 }
@@ -490,6 +437,7 @@ where
         Cos: Deref<Target = [ByteOf<Ops::Hardware>]>,
         QA: QueueAlloc<Hardware = Ops::Hardware>,
     {
+        let [long, short] = self.weights.factor(queue_alloc.queue());
         self.rope.launch(
             &rope::Args {
                 t_layout: t.layout(),
@@ -501,6 +449,12 @@ where
                 cos_layout: cos.layout(),
                 cos_base: cos.base(),
                 theta: self.meta.theta,
+                rope_type: rope::RopeType::Long {
+                    long: long.base(),
+                    short: short.base(),
+                    max_pos: 100,
+                    origin_pos: 100,
+                },
             },
             workspace,
             queue_alloc,

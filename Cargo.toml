@@ -41,7 +41,7 @@ itertools = "0.13"
 env_logger = "0.11"
 build-script-cfg = "0.0"
 
-operators = { git = "https://github.com/onenewcode/operators-rs",  rev = "f4a83f7", default-features = false }
+operators = {  path = "/home/ztf/operators-rs/operators"}
 
 search-cl-tools = { git = "https://github.com/InfiniTensor/clrt", rev = "f69b160" }
 search-infini-tools = { git = "https://github.com/InfiniTensor/infini-rt", rev = "e8362c3" }

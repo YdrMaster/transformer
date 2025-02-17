@@ -480,6 +480,7 @@ where
                 cos_layout: cos.layout(),
                 cos_base: cos.base(),
                 theta: self.meta.theta,
+                rope_type: rope::RopeType::Rope,
             },
             workspace,
             queue_alloc,
