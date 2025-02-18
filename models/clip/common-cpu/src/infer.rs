@@ -39,7 +39,7 @@ fn test_infer() {
     } = meta;
 
     let time = Instant::now();
-    let image = Image::load(picture);
+    let image = Image::load(&picture);
     println!("load image {:?}", time.elapsed());
 
     let time = Instant::now();
@@ -48,38 +48,55 @@ fn test_infer() {
         .normalize(dt, image_mean, image_std);
     println!("slice image {:?}", time.elapsed());
 
+    let batch = slices.batch();
+    let mut img_embd = meta.projector.img_embd(meta.dt, batch).map(Blob::new);
+    let d = img_embd.shape()[2];
+
     let weights = Weights::new(&storage);
     let mut worker = Worker::new(&Cpu, meta.clone(), weights);
 
-    let whole = slices.whole();
-    worker
-        .launch(
-            ClipArgs {
-                raw: whole.to_nchw(),
-                pos: pos70(whole.shape(), d_patch).map_slice(),
-                pos_resampler: pos_resampler(3584, whole.shape(), d_patch).map_slice(),
-            },
-            &mut [],
-            &ThisThread,
-        )
-        .unwrap();
-
-    if let Some(patches) = slices.patches_nchw() {
-        let &[_, 3, h, w] = patches.shape() else {
-            unreachable!()
-        };
+    {
+        let whole = slices.whole();
+        let img_embd = img_embd.map_slice_mut().slice(0, 0, 1, 1);
         worker
             .launch(
                 ClipArgs {
-                    raw: patches.map_slice(),
-                    pos: pos70([w, h], d_patch).map_slice(),
-                    pos_resampler: pos_resampler(3584, [w, h], d_patch).map_slice(),
+                    img_embd,
+                    raw: whole.to_nchw(),
+                    pos: pos70(whole.shape(), d_patch).map_slice(),
+                    pos_resampler: pos_resampler(d, whole.shape(), d_patch).map_slice(),
                 },
                 &mut [],
                 &ThisThread,
             )
             .unwrap();
     }
+
+    if let Some(patches) = slices.patches_nchw() {
+        let &[_, 3, h, w] = patches.shape() else {
+            unreachable!()
+        };
+        let img_embd = img_embd.map_slice_mut().slice(0, 1, 1, batch - 1);
+        worker
+            .launch(
+                ClipArgs {
+                    img_embd,
+                    raw: patches.map_slice(),
+                    pos: pos70([w, h], d_patch).map_slice(),
+                    pos_resampler: pos_resampler(d, [w, h], d_patch).map_slice(),
+                },
+                &mut [],
+                &ThisThread,
+            )
+            .unwrap();
+    }
+
+    println!(
+        "create {} x {} tokens from {}",
+        img_embd.shape()[0],
+        img_embd.shape()[1],
+        picture.display(),
+    );
 }
 
 fn pos70([w, h]: [usize; 2], d_patch: usize) -> Tensor<Blob> {

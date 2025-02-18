@@ -1,4 +1,5 @@
-use gguf::{tensor, GGufMetaMapExt, GGufModel};
+use gguf::{ggml_quants::digit_layout::DigitLayout, tensor, GGufMetaMapExt, GGufModel};
+use tensor::Tensor;
 
 #[derive(Clone, Debug)]
 pub struct Meta {
@@ -22,6 +23,11 @@ impl Meta {
             },
             version => todo!("Unsupported MiniCPM version: {version}"),
         }
+    }
+
+    #[inline]
+    pub fn img_embd(&self, dt: DigitLayout, batch: usize) -> Tensor<usize> {
+        Tensor::new(dt, &[batch, self.dq, self.d])
     }
 }
 

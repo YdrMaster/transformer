@@ -1,6 +1,7 @@
 pub(crate) mod resampler;
 
-use gguf::{GGufMetaMapExt, GGufModel};
+use gguf::{ggml_quants::digit_layout::DigitLayout, GGufMetaMapExt, GGufModel};
+use tensor::Tensor;
 
 #[derive(Clone, Debug)]
 pub enum ProjectorMeta {
@@ -12,6 +13,12 @@ impl ProjectorMeta {
         match gguf.get_str("clip.projector_type").unwrap() {
             "resampler" => ProjectorMeta::Resampler(resampler::Meta::from_gguf(gguf)),
             projector => todo!("unsupported projector type: {projector}"),
+        }
+    }
+
+    pub fn img_embd(&self, dt: DigitLayout, batch: usize) -> Tensor<usize> {
+        match self {
+            ProjectorMeta::Resampler(meta) => meta.img_embd(dt, batch),
         }
     }
 }

@@ -184,6 +184,12 @@ impl ImageGrid {
         }
     }
 
+    #[inline]
+    pub fn batch(&self) -> usize {
+        let [x, y] = self.grid();
+        x * y + 1
+    }
+
     pub fn patch(&self, x: usize, y: usize) -> Image<&[u8]> {
         Image(
             self.grid

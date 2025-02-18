@@ -2,6 +2,8 @@
 use tensor::Tensor;
 
 pub struct Args<'a, H: Hardware> {
+    /// shape: [batch, projector_dp, projector_d]
+    pub img_embd: Tensor<&'a mut [H::Byte]>,
     /// shape: [n, c, h, w]
     pub raw: Tensor<&'a [H::Byte]>,
     /// shape: [h x w]

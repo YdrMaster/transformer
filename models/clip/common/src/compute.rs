@@ -149,6 +149,7 @@ where
     {
         let time = Instant::now();
         let Args {
+            img_embd: proj_q,
             raw,
             pos,
             pos_resampler,
@@ -317,10 +318,7 @@ where
                 let [w, b] = weights.resampler_attn_o(queue);
                 let attn_o = (attn_w.clone().map(|_| w), Some(attn_b.clone().map(|_| b)));
 
-                let qo = Tensor::new(dt, &[batch * dq, d]);
-
-                let (buf, workspace) = workspace.split_at_mut(*qo.get());
-                let mut q_ = qo.clone().map(|_| buf);
+                let mut q_ = proj_q.merge(0..2).unwrap();
                 {
                     let mut q_ = q_.map_slice_mut().tile(0, &[batch, dq]);
                     {
@@ -363,8 +361,9 @@ where
                 }
                 let o = q_;
 
-                let (buf, workspace) = workspace.split_at_mut(*qo.get());
-                let mut o_ = qo.map(|_| buf);
+                let o_ = Tensor::new(o.dt(), o.shape());
+                let (buf, workspace) = workspace.split_at_mut(*o_.get());
+                let mut o_ = o_.map(|_| buf);
                 self.mat_mul(&mut o_, &o, attn_o, workspace, queue_alloc)?;
 
                 let [w, b] = weights.resampler_ln_post(queue);
@@ -372,9 +371,9 @@ where
                 let inplace = unsafe { o_.map_slice_static() };
                 self.layer_norm(&mut o_, &inplace, ln_post, workspace, queue_alloc)?;
 
-                let mut out = o;
+                let mut img_embd = o;
                 let w = attn_w.map(|_| weights.resampler_proj(queue));
-                self.mat_mul(&mut out, &o_, (w, None), workspace, queue_alloc)?
+                self.mat_mul(&mut img_embd, &o_, (w, None), workspace, queue_alloc)?
             }
         }
 

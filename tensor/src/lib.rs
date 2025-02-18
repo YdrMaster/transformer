@@ -84,7 +84,7 @@ impl<T> Tensor<T> {
 
         let merged = self
             .layout
-            .merge_be(0, self.layout.ndim())
+            .merge_free(0, self.layout.ndim())
             .expect("dense tensor is castable");
         let &[d] = merged.shape() else { unreachable!() };
         let &[s] = merged.strides() else {
