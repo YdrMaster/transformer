@@ -14,7 +14,6 @@ impl<T> Splitable for &[T] {
         self
     }
 }
-
 impl<T> Splitable for &mut [T] {
     #[inline]
     fn split(&self) -> Self {

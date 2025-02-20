@@ -35,7 +35,7 @@ where
     type Hardware = Cpu;
     type TopoNode = N;
     type Rope = op!(rope);
-    type Attention = op!(attention);
+    type AttentionMLA = op!(attention_mla);
     type RmsNorm = op!(rms_norm);
     type Add = op!(add);
     type MatMul = op!(mat_mul);
@@ -43,6 +43,7 @@ where
     type Rearrange = op!(rearrange);
     type Scale = op!(scale);
     type AttnKVCached = op!(attention_kv_cached);
+    type FuesdSoftmax = op!(fuesd_softmax);
     type AllReduce = R;
 
     fn debug<T>(tensor: &Tensor<T>, _queue: &QueueOf<Self::Hardware>)
