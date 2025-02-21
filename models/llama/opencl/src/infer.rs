@@ -73,7 +73,7 @@ fn test_infer() {
         .meta
         .kv_cache(nctx)
         .map(|size| context.malloc::<u8>(size));
-    let sin_cos = <Operators as llama::Operators>::build_sin_cos(dt_embd, nctx, dh, &queue);
+    let sin_cos = <Operators as llama::Operators>::build_sin_cos(dt_embd, nctx, dh, theta, &queue);
     let indices = RandomSample::build_indices(nvoc, &queue);
 
     let sample = RandomSample::new(&cl_dev);

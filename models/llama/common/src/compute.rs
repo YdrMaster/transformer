@@ -43,13 +43,14 @@ pub trait Operators {
         dt: DigitLayout,
         nctx: usize,
         dh: usize,
+        theta: f32,
         queue_alloc: &QA,
     ) -> Tensor<QA::DevMem>
     where
         QA: QueueAlloc<Hardware = Self::Hardware>,
     {
         let SinCosTable { nctx, mem } =
-            <Self::Rope as Rope<Self::Hardware>>::build_sincos(dt, nctx, dh, queue_alloc);
+            <Self::Rope as Rope<Self::Hardware>>::build_sincos(dt, nctx, dh, theta, queue_alloc);
         Tensor::new(dt, &[2, nctx, dh]).map(|_| mem)
     }
 }
