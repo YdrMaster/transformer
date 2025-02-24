@@ -17,7 +17,7 @@ pub struct Args<'a, H: Hardware> {
 }
 
 pub struct Request<'a, H: Hardware> {
-    /// shape: [buf, nblk, 2, nkvh, dh]
+    /// shape: [buf, nblk, nh, dkv+dr]
     pub cache: Tensor<&'a mut [H::Byte]>,
     pub seq_len: usize,
     pub out_len: usize,

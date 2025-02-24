@@ -12,6 +12,7 @@ use operators::{
     all_reduce::{self, AllReduce, ReduceOp},
     attention_kv_cached::AttnKVCached,
     attention_mla::{self, AttentionMLA},
+    attention_mla_cached::AttentionMLACached,
     fuesd_softmax::AttnMask,
     mat_mul::{self, MatMul},
     rearrange::{self, Rearrange},
@@ -29,7 +30,7 @@ pub trait Operators {
     type Hardware: Hardware;
     type TopoNode: TopoNode<Self::Hardware>;
     type AttentionMLA: AttentionMLA<Self::Hardware>;
-    type AttnKVCached: AttnKVCached<Self::Hardware>;
+    type AttentionMLACached: AttentionMLACached<Self::Hardware>;
     type Rope: Rope<Self::Hardware>;
     type RmsNorm: RmsNorm<Self::Hardware>;
     type Add: Add<Self::Hardware>;
@@ -84,7 +85,7 @@ pub struct Minicpm3Worker<Ops: Operators, W> {
     weights: WeightDecorator<W>,
     dt_pos: DigitLayout,
     add: Ops::Add,
-    attn_kv_cached: Ops::AttnKVCached,
+    attn_mla_cached: Ops::AttentionMLACached,
     attention_mla: Ops::AttentionMLA,
     rope: Ops::Rope,
     rms_norm: Ops::RmsNorm,
@@ -103,7 +104,7 @@ impl<Ops: Operators, W> Minicpm3Worker<Ops, W> {
             id,
             weights: meta.decorator(weights),
             meta,
-            attn_kv_cached: Ops::AttnKVCached::new(processor),
+            attn_mla_cached: Ops::AttentionMLACached::new(processor),
             rope: Ops::Rope::new(processor),
             rms_norm: Ops::RmsNorm::new(processor),
             mat_mul: Ops::MatMul::new(processor),
@@ -266,6 +267,11 @@ where
                     queue_alloc,
                 )?;
 
+                println!("{:?}",kv.shape());
+                println!("{:?}",k_rope.shape());
+                println!("{:?}",kv.strides());
+                println!("{:?}",k_rope.strides());
+                todo!();
                 drop(q3);
                 // attn_output
                 let attn_output = tensor(&[nt, nh, dv]);
@@ -277,6 +283,7 @@ where
                 let mut o=unsafe {
                     attn_output.map_slice_static_mut().transpose(&[1, 0])
                 };
+          
                 self.attnention(
                     &mut q_nope,
                     &kv_lora,

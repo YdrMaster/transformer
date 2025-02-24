@@ -42,7 +42,7 @@ where
     type Swiglu = op!(swiglu);
     type Rearrange = op!(rearrange);
     type Scale = op!(scale);
-    type AttnKVCached = op!(attention_kv_cached);
+    type AttentionMLACached =  op!(attention_mla_cached);
     type FuesdSoftmax = op!(fuesd_softmax);
     type AllReduce = R;
 
