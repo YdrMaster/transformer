@@ -102,11 +102,13 @@ impl MiniCPM3Meta {
         let &Self {
             dt_embd,
             nblk,
-            nkvh,
+            nh,
+            dk,
+            dkv_lora,
             dh,
             ..
         } = self;
-        Tensor::new(dt_embd, &[buf, nblk, 2, nkvh, dh])
+        Tensor::new(dt_embd, &[buf, nblk, nh, dkv_lora+dh])
     }
 
     pub fn embd(&self, nt: usize) -> Tensor<usize> {

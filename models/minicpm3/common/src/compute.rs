@@ -2,7 +2,9 @@ use super::{args::Args, MiniCPM3BlkWeight, MiniCPM3Meta};
 use gguf::ggml_quants::digit_layout::types as ty;
 use gguf::ggml_quants::digit_layout::DigitLayout;
 use half::f16;
+use itertools::izip;
 use itertools::Itertools;
+use operators::attention_mla_cached;
 use operators::fuesd_softmax;
 use operators::fuesd_softmax::FusedSoftmax;
 use operators::scale;
@@ -12,7 +14,7 @@ use operators::{
     all_reduce::{self, AllReduce, ReduceOp},
     attention_kv_cached::AttnKVCached,
     attention_mla::{self, AttentionMLA},
-    attention_mla_cached::AttentionMLACached,
+    attention_mla_cached::AttMLACached,
     fuesd_softmax::AttnMask,
     mat_mul::{self, MatMul},
     rearrange::{self, Rearrange},
@@ -30,7 +32,7 @@ pub trait Operators {
     type Hardware: Hardware;
     type TopoNode: TopoNode<Self::Hardware>;
     type AttentionMLA: AttentionMLA<Self::Hardware>;
-    type AttentionMLACached: AttentionMLACached<Self::Hardware>;
+    type AttMLACached: AttMLACached<Self::Hardware>;
     type Rope: Rope<Self::Hardware>;
     type RmsNorm: RmsNorm<Self::Hardware>;
     type Add: Add<Self::Hardware>;
@@ -85,7 +87,7 @@ pub struct Minicpm3Worker<Ops: Operators, W> {
     weights: WeightDecorator<W>,
     dt_pos: DigitLayout,
     add: Ops::Add,
-    attn_mla_cached: Ops::AttentionMLACached,
+    attn_mla_cached: Ops::AttMLACached,
     attention_mla: Ops::AttentionMLA,
     rope: Ops::Rope,
     rms_norm: Ops::RmsNorm,
@@ -104,7 +106,7 @@ impl<Ops: Operators, W> Minicpm3Worker<Ops, W> {
             id,
             weights: meta.decorator(weights),
             meta,
-            attn_mla_cached: Ops::AttentionMLACached::new(processor),
+            attn_mla_cached: Ops::AttMLACached::new(processor),
             rope: Ops::Rope::new(processor),
             rms_norm: Ops::RmsNorm::new(processor),
             mat_mul: Ops::MatMul::new(processor),
@@ -143,7 +145,7 @@ where
         let Args {
             embd: mut x,
             mut logits,
-            requests,
+            mut requests,
             num_tokens: nt,
             sin_cos,
             ..
@@ -193,6 +195,7 @@ where
                 queue_alloc,
             )
         });
+        let req_split = requests.iter().map(|req| req.seq_len).collect::<Vec<_>>();
         // 缩放
         let inplace = unsafe { x.map_slice_static() };
         self.scale(&mut x, &inplace, scale_emb, workspace, queue_alloc)?;
@@ -206,17 +209,18 @@ where
             let mut q = q.map(|_| buf);
             let w = self.weights.attn_qa(iblk, queue).transpose(&[1, 0]);
             self.mat_mul(&mut q, 0., &x1, &w, 1., workspace, queue_alloc)?;
-
+           
             let inplace = unsafe { q.map_slice_static() };
             let w = self.weights.attn_qa_norm(iblk, queue);
             self.rms_norm(&mut q, &inplace, &w, workspace, queue_alloc)?;
             {
+            
                 let q1 = tensor(&[nt, nh * dk]);
                 let (buf, workspace) = workspace.split_at_mut(*q1.get());
                 let mut q1 = q1.map(|_| buf);
                 let w = self.weights.attn_qb(iblk, queue).transpose(&[1, 0]);
                 self.mat_mul(&mut q1, 0., &q, &w, 1., workspace, queue_alloc)?;
-
+          
                 let mut q3 = q1.tile(1, &[nh, dk]);
                 let q2 = unsafe { q3.map_slice_static_mut() };
                 split_mut!(q2=>q_nope, q_rope;[dnope, dh]@ 2);
@@ -230,12 +234,13 @@ where
                 self.mat_mul(&mut kv_pe, 0., &x1, &w, 1., workspace, queue_alloc)?;
                 drop(q);
                 split_mut!(kv_pe =>  kv_lora, k_rope; [dkv_lora, dh] @ 1);
-
-                self.rope(&mut q_rope, &pos, &sin, &cos, workspace, queue_alloc)?;
                 let mut k_rope = k_rope.tile(1, &[1, dh]);
                 self.rope(&mut k_rope, &pos, &sin, &cos, workspace, queue_alloc)?;
+                self.rope(&mut q_rope, &pos, &sin, &cos, workspace, queue_alloc)?;
+                Ops::debug(&k_rope, queue);
+                todo!();
                 let k_rope = k_rope.broadcast(1, nh);
-
+              
                 let inplace = unsafe { kv_lora.map_slice_static() };
                 let w = self.weights.attn_kva_norm(iblk, queue);
                 self.rms_norm(&mut kv_lora, &inplace, &w, workspace, queue_alloc)?;
@@ -253,6 +258,7 @@ where
                 split!(kv_b_proj=> q_absorb , out_absorb ; [dnope, dv] @ 1);
                 let inplace = unsafe { q_nope.map_slice_static() };
 
+
                 let q_nope_0 = q_nope.map_slice().transpose(&[1, 0]);
                 let q_nope_1 = tensor(&[nh, nt, dkv_lora]);
                 let (buf, workspace) = workspace.split_at_mut(*q_nope_1.get());
@@ -266,43 +272,49 @@ where
                     workspace,
                     queue_alloc,
                 )?;
-
-                println!("{:?}",kv.shape());
-                println!("{:?}",k_rope.shape());
-                println!("{:?}",kv.strides());
-                println!("{:?}",k_rope.strides());
-                todo!();
-                drop(q3);
+          
                 // attn_output
                 let attn_output = tensor(&[nt, nh, dv]);
                 let (buf, workspace) = workspace.split_at_mut(*attn_output.get());
                 let mut attn_output = attn_output.map(|_| buf);
-                let q_rope = q_rope.transpose(&[1, 0]);
-                let k_rope = k_rope.transpose(&[1, 0]);
-                let kv_lora = kv_lora.map_slice().tile(0, &[1, 1]).broadcast(0, nh);
-                let mut o=unsafe {
-                    attn_output.map_slice_static_mut().transpose(&[1, 0])
-                };
-          
-                self.attnention(
-                    &mut q_nope,
-                    &kv_lora,
-                    &out_absorb,
-                    &q_rope,
-                    &k_rope,
-                    &mut o,
-                    1,
-                    workspace,
-                    queue_alloc,
-                )?;
+                let mut o = unsafe { attn_output.map_slice_static_mut().transpose(&[1, 0]) };
+
+                {
+                    let q_rope = q_rope.transpose(&[1, 0]);
+                    let k_rope = k_rope.transpose(&[1, 0]);
+                    let kv_lora = kv_lora.map_slice().tile(0, &[1, nt]).broadcast(0, nh);
+                    let q_nope = q_nope.split(1, &req_split);
+                    let q_rope = q_rope.split(1, &req_split);
+                    let k_rope = k_rope.split(1, &req_split);
+                    let kv_lora = kv_lora.split(1, &req_split);
+
+                    for (mut qn, kv, qr, kr, req) in izip!(q_nope, kv_lora, q_rope, k_rope, &mut requests)
+                    {
+                        let cache = req
+                            .cache
+                            .as_mut() // [buf, nblk, nh, dkv+dr]
+                            .index(1, iblk) // [buf,  nh, dkv+dr]
+                            .transpose(&[1, 0]) // [ nh,buf,  dkv+dr]
+                            .map(|t| &mut t[..]);
+
+                        split_mut!(cache => kvc, krc; [dkv_lora, dh] @ 2);
+                      
+                        self.attn_mla_cache(&mut qn, &kv, &kr, &qr, &out_absorb, &mut o, &mut kvc, &mut krc, req.pos, workspace, queue_alloc)?;
+                    }
+                }
+
                 let o = attn_output.map_slice().merge(1..3).unwrap();
                 let w = self.weights.attn_o(iblk, queue);
-                self.mat_mul(&mut x1, 0., &o, &w, s, workspace, queue_alloc)?;
-                let inplace = unsafe { x.map_slice_static() };
-                self.add(&mut x, &inplace, &x1, workspace, queue_alloc)?;
+               
+                self.mat_mul(&mut x1, 0., &o, &w, 1., workspace, queue_alloc)?;
             }
+            let inplace = unsafe { x.map_slice_static() };
+           
+            self.add(&mut x, &inplace, &x1, workspace, queue_alloc)?;
+            self.all_reduce(&mut x, workspace, queue_alloc)?;
             let w = self.weights.ffn_norm(iblk, queue);
             self.rms_norm(&mut x1, &x, &w, workspace, queue_alloc)?;
+
             drop(w);
 
             let (buf, workspace) = workspace.split_at_mut(*gate_up.get());
@@ -318,13 +330,16 @@ where
 
             self.swiglu(&mut gate, &up, workspace, queue_alloc)?;
 
-
             let w = self.weights.ffn_down(iblk, queue);
             self.mat_mul(&mut x1, 0., &gate, &w, s, workspace, queue_alloc)?;
 
             let inplace = unsafe { x.map_slice_static() };
             self.add(&mut x, &inplace, &x1, workspace, queue_alloc)?;
-
+            if iblk==0{
+                Ops::debug(&x, queue);
+                todo!();
+            }
+          
             self.all_reduce(&mut x, workspace, queue_alloc)?
         }
         if logits.shape()[0] == 0 {
@@ -355,8 +370,7 @@ where
             self.rms_norm(&mut x, &inplace, &w, workspace, queue_alloc)?
         }
         let w = self.weights.output(queue);
-        Ops::debug(&x, queue);
-        todo!();
+
         self.mat_mul(&mut logits, 0., &x, &w, 1., workspace, queue_alloc)
     }
 }
@@ -455,6 +469,7 @@ where
                 cos_layout: cos.layout(),
                 cos_base: cos.base(),
                 theta: self.meta.theta,
+                // TODO
                 rope_type: rope::RopeType::Long {
                     long: long.base(),
                     short: short.base(),
@@ -466,14 +481,16 @@ where
             queue_alloc,
         )
     }
-    fn attnention<Q, KV, A, QR, KR, O, QA>(
+    fn attn_mla_cache<Q, KV, KR, QR, A, O, KVC, KRC, QA>(
         &self,
         q: &mut Tensor<Q>,
         kv: &Tensor<KV>,
-        a: &Tensor<A>,
-        qr: &Tensor<QR>,
         kr: &Tensor<KR>,
+        qr: &Tensor<QR>,
+        a: &Tensor<A>,
         o: &mut Tensor<O>,
+        kvc: &mut Tensor<KVC>,
+        krc: &mut Tensor<KRC>,
         pos: usize,
         workspace: &mut [ByteOf<Ops::Hardware>],
         queue_alloc: &QA,
@@ -481,14 +498,16 @@ where
     where
         Q: DerefMut<Target = [ByteOf<Ops::Hardware>]>,
         KV: Deref<Target = [ByteOf<Ops::Hardware>]>,
-        A: Deref<Target = [ByteOf<Ops::Hardware>]>,
-        QR: Deref<Target = [ByteOf<Ops::Hardware>]>,
         KR: Deref<Target = [ByteOf<Ops::Hardware>]>,
+        QR: Deref<Target = [ByteOf<Ops::Hardware>]>,
+        A: Deref<Target = [ByteOf<Ops::Hardware>]>,
         O: DerefMut<Target = [ByteOf<Ops::Hardware>]>,
+        KVC: DerefMut<Target = [ByteOf<Ops::Hardware>]>,
+        KRC: DerefMut<Target = [ByteOf<Ops::Hardware>]>,
         QA: QueueAlloc<Hardware = Ops::Hardware>,
     {
-        self.attention_mla.launch(
-            &attention_mla::Args {
+        self.attn_mla_cached.launch(
+            &attention_mla_cached::Args {
                 q_layout: q.layout(),
                 q_base: q.base_mut(),
                 kv_layout: kv.layout(),
@@ -501,13 +520,17 @@ where
                 kr_base: kr.base(),
                 o_layout: o.layout(),
                 o_base: o.base_mut(),
+                kv_cache_layout: kvc.layout(),
+                kv_cache_base: kvc.base_mut(),
+                kr_cache_layout: krc.layout(),
+                kr_cache_base: krc.base_mut(),
                 mask: AttnMask::Causal,
+                pos: pos.into(),
             },
             workspace,
             queue_alloc,
         )
     }
-
     fn swiglu<Gate, Up, QA>(
         &self,
         gate: &mut Tensor<Gate>,

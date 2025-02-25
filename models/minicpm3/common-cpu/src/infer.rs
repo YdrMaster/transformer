@@ -29,7 +29,7 @@ fn test_infer() {
     let Some(Inference {
         model,
         devices,
-        mut prompt,
+        prompt,
         as_user,
         temperature,
         top_p,
@@ -39,7 +39,6 @@ fn test_infer() {
     else {
         return;
     };
-    prompt = "我".to_owned();
     let gguf = GGufModel::read(model.iter().map(|s| &**s));
 
     let TokenizerAndPrompt {
