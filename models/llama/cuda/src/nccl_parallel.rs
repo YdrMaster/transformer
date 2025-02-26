@@ -105,6 +105,7 @@ fn test_infer() {
                             meta.dt_embd,
                             meta.nctx,
                             meta.dh,
+                            meta.theta,
                             &stream,
                         );
 

@@ -117,6 +117,7 @@ fn test_infer() {
                         types::F32,
                         meta.nctx,
                         meta.dh,
+                        meta.theta,
                         &stream,
                     );
 

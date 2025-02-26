@@ -1,4 +1,4 @@
-﻿use crate::{Operators, RandomSample, Weights};
+use crate::{Operators, RandomSample, Weights};
 use common::Distribution;
 use gguf::GGufModel;
 use llama::{
@@ -86,8 +86,13 @@ fn test_infer() {
         queue_alloc.put(free.0 & !((64 << 20) - 1));
 
         let mut worker = Worker::new(0, &gpu, meta.clone(), weights);
-        let sin_cos =
-            <Operators as llama::Operators>::build_sin_cos(dt_embd, nctx, dh, &queue_alloc);
+        let sin_cos = <Operators as llama::Operators>::build_sin_cos(
+            dt_embd,
+            nctx,
+            dh,
+            meta.theta,
+            &queue_alloc,
+        );
         let indices = RandomSample::build_indices(nvoc, &queue_alloc);
         let sample = RandomSample::new(gpu);
 
