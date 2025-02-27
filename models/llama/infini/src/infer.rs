@@ -82,6 +82,14 @@ fn test_infer() {
             infini_rt::init(infini_rt::DEVICE_ASCEND);
             WorkerSeed::new(InfiniNode::ascend_npu(&indices))
         }
+        "metax" => {
+            infini_rt::init(infini_rt::DEVICE_METAX);
+            WorkerSeed::new(InfiniNode::metax_gpu(&indices))
+        }
+        "mthreads" => {
+            infini_rt::init(infini_rt::DEVICE_MTHREADS);
+            WorkerSeed::new(InfiniNode::mthreads_gpu(&indices))
+        }
         _ => todo!(),
     };
     let barrier = Arc::new(Barrier::new(dist + 1));
