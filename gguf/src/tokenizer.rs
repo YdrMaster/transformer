@@ -17,7 +17,8 @@ impl GGufModel<'_> {
     pub fn tokenizer(&self) -> Tokenizer {
         match self.tokenizer_ggml_model().unwrap() {
             "llama" => Tokenizer::bpe_from_gguf(self),
-            "fm9g8b" | "gpt2" => Tokenizer::lpe_from_gguf(self),
+            "gpt2" => Tokenizer::lpe_from_gguf(self, true),
+            "fm9g8b" => Tokenizer::lpe_from_gguf(self, false),
             model => panic!("Unsupported tokenizer model: {model}"),
         }
     }
@@ -95,7 +96,7 @@ impl Tokenizer {
         }
     }
 
-    fn lpe_from_gguf(gguf: &GGufModel) -> Self {
+    fn lpe_from_gguf(gguf: &GGufModel, map_utf8: bool) -> Self {
         let tokens = gguf.tokenizer_ggml_tokens().unwrap();
 
         let token_type = gguf.tokenizer_ggml_token_type().unwrap();
@@ -126,7 +127,7 @@ impl Tokenizer {
                 bos
             });
 
-        let tokeneer = Tokeneer::new(Lpe::new(vocabs, token_type, unk));
+        let tokeneer = Tokeneer::new(Lpe::new(vocabs, token_type, unk, map_utf8));
         let (en_replace, de_replace) = detective.build_map();
         Self {
             tokenize: Box::new(tokeneer),

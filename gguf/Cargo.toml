@@ -12,7 +12,7 @@ minijinja = { version = "2.7", default-features = false, features = [
     "serde",
 ] }
 serde = { version = "1.0", features = ["derive"] }
-tokeneer = { git = "https://github.com/InfiniTensor/tokeneer", rev = "c0da02c" }
+tokeneer = { git = "https://github.com/InfiniTensor/tokeneer", rev = "5fc0af8" }
 memmap2 = "0.9"
 
 [dev-dependencies]
