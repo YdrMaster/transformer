@@ -9,9 +9,10 @@ ggus.workspace = true
 minijinja = { version = "2.7", default-features = false, features = [
     "loader",
     "builtins",
+    "serde",
 ] }
 serde = { version = "1.0", features = ["derive"] }
-tokeneer = "0.0"
+tokeneer = { git = "https://github.com/InfiniTensor/tokeneer", rev = "c0da02c" }
 memmap2 = "0.9"
 
 [dev-dependencies]

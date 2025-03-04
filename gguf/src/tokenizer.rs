@@ -5,7 +5,7 @@ use std::{
     collections::HashMap,
     str::{from_utf8, from_utf8_unchecked},
 };
-use tokeneer::{utok, Bpe, Lpe, Method, Tokeneer};
+use tokeneer::{utok, Bpe, Lpe, TokenType, Tokeneer};
 
 pub struct Tokenizer {
     tokenize: Box<dyn Tokenize>,
@@ -62,10 +62,21 @@ impl Tokenizer {
 
     fn bpe_from_gguf(gguf: &GGufModel) -> Self {
         let tokens = gguf.tokenizer_ggml_tokens().unwrap();
+
         let scores = gguf.tokenizer_ggml_scores().unwrap();
-        let token_type = gguf.tokenizer_ggml_token_type().unwrap();
         assert_eq!(tokens.len(), scores.len());
+        let scores = scores.map(|score| score.unwrap());
+
+        let token_type = gguf.tokenizer_ggml_token_type().unwrap();
         assert_eq!(tokens.len(), token_type.len());
+        let token_type = token_type.map(|ty| match unsafe { std::mem::transmute(ty.unwrap()) } {
+            GGmlTokenType::Normal => TokenType::Normal,
+            GGmlTokenType::Unknown => TokenType::Unknown,
+            GGmlTokenType::Control => TokenType::Control,
+            GGmlTokenType::User => TokenType::UserDefined,
+            GGmlTokenType::Unused => TokenType::Normal,
+            GGmlTokenType::Byte => TokenType::Byte,
+        });
 
         let mut detective = SpaceDetective::new();
         let vocabs = tokens.map(|piece| {
@@ -73,20 +84,9 @@ impl Tokenizer {
             detective.record(piece);
             piece
         });
-        let scores = scores.map(|score| score.unwrap());
-        let is_byte = token_type.map(|ty| GGmlTokenType::Byte as i32 == ty.unwrap());
 
         let unk = gguf.tokenizer_ggml_unknown_token_id().unwrap();
-        let bos = gguf.tokenizer_ggml_bos_token_id().unwrap();
-        let eos = gguf.tokenizer_ggml_eos_token_id().unwrap();
-
-        let bpe = Bpe::new(vocabs, scores, is_byte, unk);
-        let bos_piece = from_utf8(bpe.decode(bos)).unwrap().to_string();
-        let eos_piece = from_utf8(bpe.decode(eos)).unwrap().to_string();
-
-        let mut tokeneer = Tokeneer::new(bpe);
-        tokeneer.extend_special([(bos_piece, vec![bos]), (eos_piece, vec![eos])]);
-
+        let tokeneer = Tokeneer::new(Bpe::new(vocabs, scores, token_type, unk));
         let (en_replace, de_replace) = detective.build_map();
         Self {
             tokenize: Box::new(tokeneer),
@@ -97,6 +97,17 @@ impl Tokenizer {
 
     fn lpe_from_gguf(gguf: &GGufModel) -> Self {
         let tokens = gguf.tokenizer_ggml_tokens().unwrap();
+
+        let token_type = gguf.tokenizer_ggml_token_type().unwrap();
+        assert_eq!(tokens.len(), token_type.len());
+        let token_type = token_type.map(|ty| match unsafe { std::mem::transmute(ty.unwrap()) } {
+            GGmlTokenType::Normal => TokenType::Normal,
+            GGmlTokenType::Unknown => TokenType::Unknown,
+            GGmlTokenType::Control => TokenType::Control,
+            GGmlTokenType::User => TokenType::UserDefined,
+            GGmlTokenType::Unused => TokenType::Normal,
+            GGmlTokenType::Byte => TokenType::Byte,
+        });
 
         let mut detective = SpaceDetective::new();
         let vocabs = tokens.map(|piece| {
@@ -115,13 +126,7 @@ impl Tokenizer {
                 bos
             });
 
-        let bpe = Lpe::new(vocabs, unk);
-        let bos_piece = from_utf8(bpe.decode(bos)).unwrap().to_string();
-        let eos_piece = from_utf8(bpe.decode(eos)).unwrap().to_string();
-
-        let mut tokeneer = Tokeneer::new(bpe);
-        tokeneer.extend_special([(bos_piece, vec![bos]), (eos_piece, vec![eos])]);
-
+        let tokeneer = Tokeneer::new(Lpe::new(vocabs, token_type, unk));
         let (en_replace, de_replace) = detective.build_map();
         Self {
             tokenize: Box::new(tokeneer),
